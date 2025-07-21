@@ -1,0 +1,205 @@
+name: Mailman Listserv Workflow
+
+on:
+  workflow_dispatch:
+
+env:
+  SN_URL: https://utsdevesm.service-now.com
+
+jobs:
+  collect-tasks:
+    name: Collect Add/Remove Tasks for All Lists
+    runs-on: ubuntu-latest
+    outputs:
+      task_matrix: ${{ steps.build_matrix.outputs.matrix }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Fetch and Build Task Matrix
+        id: build_matrix
+        env:
+          SN_USERNAME: ${{ secrets.SERVICECONNECTUSERNAME }}
+          SN_PASSWORD: ${{ secrets.SERVICECONNECTPASSWORD }}
+        run: |
+          cat <<EOF > build_matrix.py
+import os
+import urllib.parse
+import requests
+import json
+
+sn_url = os.environ["SN_URL"]
+username = os.environ["SN_USERNAME"]
+password = os.environ["SN_PASSWORD"]
+
+lists = [
+    {
+        "name": "CASS",
+        "add_desc": "Add user to CASS ebrief.",
+        "remove_desc": "Remove user to CASS ebrief.",
+        "add_url": "http://listserv.uts.edu.au/mailman/admin/cass-ebrief/members/add",
+        "remove_url": "http://listserv.uts.edu.au/mailman/admin/cass-ebrief/members/remove",
+        "password_secret": "CASS_E_BRIEF_PASSWORD"
+    },
+    {
+        "name": "Academic",
+        "add_desc": "Add user to Academic ebrief",
+        "remove_desc": "Remove user Academic ebrief",
+        "add_url": "http://listserv.uts.edu.au/mailman/admin/mytimetable-academic/members/add",
+        "remove_url": "http://listserv.uts.edu.au/mailman/admin/mytimetable-academic/members/remove",
+        "password_secret": "MYTIMETABLE_E_BRIEF_PASSWORD"
+    },
+    {
+        "name": "non-Academic",
+        "add_desc": "Add user to non-Academic ebrief",
+        "remove_desc": "Remove user from non-Academic ebrief",
+        "add_url": "http://listserv.uts.edu.au/mailman/admin/mytimetable-non-academic/members/add",
+        "remove_url": "http://listserv.uts.edu.au/mailman/admin/mytimetable-non-academic/members/remove",
+        "password_secret": "MYTIMETABLE_E_BRIEF_PASSWORD"
+    }
+]
+
+matrix = []
+
+def fetch_task_numbers(desc):
+    query = f"active=true^state=1^short_description={desc}"
+    encoded_query = urllib.parse.quote(query)
+    url = f"{sn_url}/api/now/table/sc_task?sysparm_query={encoded_query}&sysparm_fields=number"
+    r = requests.get(url, auth=(username, password), headers={"Accept": "application/json"})
+    r.raise_for_status()
+    return [x["number"] for x in r.json().get("result", [])]
+
+for l in lists:
+    for mode in ["add", "remove"]:
+        desc = l[f"{mode}_desc"]
+        url = l[f"{mode}_url"]
+        password_secret = l["password_secret"]
+        task_nums = fetch_task_numbers(desc)
+        for task_num in task_nums:
+            matrix.append({
+                "list": l["name"],
+                "mode": mode,
+                "url": url,
+                "password_secret": password_secret,
+                "task_num": task_num
+            })
+
+print(json.dumps(matrix))
+EOF
+          python3 build_matrix.py > matrix.json
+          echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
+
+  get-emails:
+    name: Get Requested For Emails for Each Task
+    needs: collect-tasks
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.collect-tasks.outputs.task_matrix) }}
+    outputs:
+      email: ${{ steps.get_email.outputs.email }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Get Requested For Email
+        id: get_email
+        env:
+          SN_USERNAME: ${{ secrets.SERVICECONNECTUSERNAME }}
+          SN_PASSWORD: ${{ secrets.SERVICECONNECTPASSWORD }}
+          SN_URL: ${{ env.SN_URL }}
+        run: |
+          TASK_NUM="${{ matrix.task_num }}"
+          RITM_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
+            "$SN_URL/api/now/table/sc_task?sysparm_query=number=${TASK_NUM}&sysparm_fields=request_item" | jq -r '.result[0].request_item.value')
+          REQUESTED_FOR_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
+            "$SN_URL/api/now/table/sc_req_item?sysparm_query=sys_id=${RITM_SYSID}&sysparm_fields=requested_for" | jq -r '.result[0].requested_for.value')
+          EMAIL=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
+            "$SN_URL/api/now/table/sys_user?sysparm_query=sys_id=${REQUESTED_FOR_SYSID}&sysparm_fields=email" | jq -r '.result[0].email // ""')
+          echo "email=$EMAIL" >> $GITHUB_OUTPUT
+
+  mailman-action:
+    name: Add or Remove User from Listserv
+    needs: get-emails
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.collect-tasks.outputs.task_matrix) }}
+    outputs:
+      result: ${{ steps.mailman.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Install Selenium and Chrome
+        run: |
+          pip install selenium
+          sudo apt-get update
+          sudo apt-get install -y chromium-driver chromium-browser
+      - name: Add or Remove User from Listserv
+        id: mailman
+        env:
+          LISTSERV_PASSWORD: ${{ secrets[matrix.password_secret] }}
+        run: |
+          python3 scripts/listserv_mailman.py \
+            --action "${{ matrix.mode }}" \
+            --url "${{ matrix.url }}" \
+            --password "$LISTSERV_PASSWORD" \
+            --email "${{ needs.get-emails.outputs.email }}" \
+            > result.txt
+          echo "result=$(cat result.txt)" >> $GITHUB_OUTPUT
+
+  update-task:
+    name: Update and Close ServiceNow Task
+    needs: [get-emails, mailman-action]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.collect-tasks.outputs.task_matrix) }}
+    steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Update ServiceNow Task
+        env:
+          SN_USERNAME: ${{ secrets.SERVICECONNECTUSERNAME }}
+          SN_PASSWORD: ${{ secrets.SERVICECONNECTPASSWORD }}
+          SN_URL: ${{ env.SN_URL }}
+        run: |
+          TASK_NUM="${{ matrix.task_num }}"
+          EMAIL="${{ needs.get-emails.outputs.email }}"
+          MODE="${{ matrix.mode }}"
+          RESPONSE=$(cat result.txt 2>/dev/null || echo "")
+          if [[ "$MODE" == "add" ]]; then
+            WORK_NOTES="$RESPONSE"
+          else
+            WORK_NOTES="$EMAIL - removed for ebrief"
+          fi
+          TASK_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" \
+            -H "Accept: application/json" \
+            "$SN_URL/api/now/table/sc_task?sysparm_query=number=${TASK_NUM}&sysparm_fields=sys_id" | jq -r '.result[0].sys_id')
+          CI_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" \
+            -H "Accept: application/json" \
+            "$SN_URL/api/now/table/cmdb_ci?sysparm_query=name=Listserv&sysparm_fields=sys_id" | jq -r '.result[0].sys_id')
+          if [[ -n "$TASK_SYSID" && "$TASK_SYSID" != "null" && -n "$CI_SYSID" && "$CI_SYSID" != "null" ]]; then
+            curl -s -u "$SN_USERNAME:$SN_PASSWORD" \
+              -X PATCH \
+              -H "Content-Type: application/json" \
+              -d '{
+                    "state": "3",
+                    "cmdb_ci": "'"${CI_SYSID}"'",
+                    "work_notes": "'"${WORK_NOTES}"'"
+                  }' \
+              "$SN_URL/api/now/table/sc_task/${TASK_SYSID}"
+            echo "✅ Task updated and CI assigned"
+          else
+            echo "❌ Could not resolve sys_id for task (${TASK_SYSID}) or CI (${CI_SYSID})"
+            exit 1
+          fi
