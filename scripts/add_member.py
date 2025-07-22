@@ -55,6 +55,7 @@ try:
     # 8. Wait for the result and find the relevant <li>
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "li")))
     lis = driver.find_elements(By.TAG_NAME, "li")
+   
 
     entry = None
     for li in lis:
@@ -63,9 +64,11 @@ try:
             break
 
     if entry:
-        print(f"Result: {entry}")
+        if entry.strip() == EMAIL:
+            print(f"Result: {EMAIL} -- Subscribed")
+        else:
+            print(f"Result: {entry}")
     else:
-        # fallback: print all list items
         print(f"Could not find result for {EMAIL} in page.")
         print("Page <li> items:")
         for li in lis:
