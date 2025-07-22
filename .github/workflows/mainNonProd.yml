@@ -26,8 +26,8 @@ jobs:
       - name: Build matrix from YAML env
         id: build_matrix
         env:
-          SN_USERNAME: ${{ secrets.SERVICECONNECTUSERNAME }}
-          SN_PASSWORD: ${{ secrets.SERVICECONNECTPASSWORD }}
+          SN_USERNAME: ${{ secrets.SERVICECONNECT_USERNAME }}
+          SN_PASSWORD: ${{ secrets.SERVICECONNECT_PASSWORD }}
           SN_URL: ${{ env.SN_URL }}
           LISTS_YAML: |
             - name: TestList
@@ -60,8 +60,8 @@ jobs:
       - name: Get Requested For Email
         id: get_email
         env:
-          SN_USERNAME: ${{ secrets.SERVICECONNECTUSERNAME }}
-          SN_PASSWORD: ${{ secrets.SERVICECONNECTPASSWORD }}
+          SN_USERNAME: ${{ secrets.SERVICECONNECT_USERNAME }}
+          SN_PASSWORD: ${{ secrets.SERVICECONNECT_PASSWORD }}
           SN_URL: ${{ env.SN_URL }}
         run: |
           TASK_NUM="${{ matrix.task_num }}"
@@ -118,8 +118,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y jq
       - name: Update ServiceNow Task
         env:
-          SN_USERNAME: ${{ secrets.SERVICECONNECTUSERNAME }}
-          SN_PASSWORD: ${{ secrets.SERVICECONNECTPASSWORD }}
+          SN_USERNAME: ${{ secrets.SERVICECONNECT_USERNAME }}
+          SN_PASSWORD: ${{ secrets.SERVICECONNECT_PASSWORD }}
           SN_URL: ${{ env.SN_URL }}
         run: |
           TASK_NUM="${{ matrix.task_num }}"
