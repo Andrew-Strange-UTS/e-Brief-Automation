@@ -99,25 +99,48 @@ jobs:
           fetch_emails "NACAD_REMOVE" "$NACAD_REMOVE"
 
       # --- Step 3 --- Selenium for non-academic test list only, call external scripts
-      - name: Add non-academic emails (Selenium)
-        id: add-nonacad
-        env:
-          TESTPASSWORD: ${{ secrets.TESTPASSWORD }}
-          NACAD_ADD_EMAILS: ${{ env.NACAD_ADD_EMAILS }}
+      # WRITE PAIRS TO FILE
+      - name: Write email pairs to input files
         run: |
-          echo "$NACAD_ADD_EMAILS" > add_targets.json
-          python3 scripts/add_member_from_listserv.py add_targets.json "https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/add" "$TESTPASSWORD" add_results.json
-          cat add_results.json
+          echo '${{ env.CASS_ADD_EMAILS }}' > inputs_cass_add.json
+          echo '${{ env.CASS_REMOVE_EMAILS }}' > inputs_cass_remove.json
+          echo '${{ env.ACAD_ADD_EMAILS }}' > inputs_acad_add.json
+          echo '${{ env.ACAD_REMOVE_EMAILS }}' > inputs_acad_remove.json
+          echo '${{ env.NACAD_ADD_EMAILS }}' > inputs_nacad_add.json
+          echo '${{ env.NACAD_REMOVE_EMAILS }}' > inputs_nacad_remove.json
 
-      - name: Remove non-academic emails (Selenium)
-        id: remove-nonacad
-        env:
-          TESTPASSWORD: ${{ secrets.TESTPASSWORD }}
-          NACAD_REMOVE_EMAILS: ${{ env.NACAD_REMOVE_EMAILS }}
+      # ---- RUN FOR EACH LIST ----
+
+      - name: Add CASS members
         run: |
-          echo "$NACAD_REMOVE_EMAILS" > remove_targets.json
-          python3 scripts/remove_member_from_listserv.py remove_targets.json "https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/remove" "$TESTPASSWORD" remove_results.json
-          cat remove_results.json
+          python3 scripts/add_member_from_listserv.py inputs_cass_add.json "https://<CASS_MAILMAN_URL>/add" "${{ secrets.CASS_PASSWORD }}" cass_add_results.json
+          cat cass_add_results.json
+
+      - name: Remove CASS members
+        run: |
+          python3 scripts/remove_member_from_listserv.py inputs_cass_remove.json "https://<CASS_MAILMAN_URL>/remove" "${{ secrets.CASS_PASSWORD }}" cass_remove_results.json
+          cat cass_remove_results.json
+
+      - name: Add Academic members
+        run: |
+          python3 scripts/add_member_from_listserv.py inputs_acad_add.json "https://<ACAD_MAILMAN_URL>/add" "${{ secrets.ACAD_PASSWORD }}" acad_add_results.json
+          cat acad_add_results.json
+
+      - name: Remove Academic members
+        run: |
+          python3 scripts/remove_member_from_listserv.py inputs_acad_remove.json "https://<ACAD_MAILMAN_URL>/remove" "${{ secrets.ACAD_PASSWORD }}" acad_remove_results.json
+          cat acad_remove_results.json
+
+      - name: Add Non-academic members
+        run: |
+          python3 scripts/add_member_from_listserv.py inputs_nacad_add.json "https://<NACAD_MAILMAN_URL>/add" "${{ secrets.NACAD_PASSWORD }}" nacad_add_results.json
+          cat nacad_add_results.json
+
+      - name: Remove Non-academic members
+        run: |
+          python3 scripts/remove_member_from_listserv.py inputs_nacad_remove.json "https://<NACAD_MAILMAN_URL>/remove" "${{ secrets.NACAD_PASSWORD }}" nacad_remove_results.json
+          cat nacad_remove_results.json
+
 
       # Final Step: Update ServiceNow sc_task with results and close/annotate task where required
       - name: Update ServiceNow tasks with results
