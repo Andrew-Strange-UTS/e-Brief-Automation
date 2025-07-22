@@ -83,7 +83,7 @@ jobs:
           echo "$main_array" > mailman_main_array.json
           echo "Final main_array structure:"
           cat mailman_main_array.json
-
+      
       - name: Add/remove members for all lists and fill in responses
         env:
           CASS_ADD_PW: ${{ secrets.CASS_PASSWORD }}
@@ -92,21 +92,23 @@ jobs:
           ACAD_REMOVE_PW: ${{ secrets.ACAD_PASSWORD }}
           NACAD_ADD_PW: ${{ secrets.NACAD_PASSWORD }}
           NACAD_REMOVE_PW: ${{ secrets.NACAD_PASSWORD }}
-          CASS_ADD_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
-          CASS_REMOVE_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
-          ACAD_ADD_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
-          ACAD_REMOVE_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
-          NACAD_ADD_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
-          NACAD_REMOVE_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
+      
+          CASS_ADD_URL: https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/add
+          CASS_REMOVE_URL: https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/remove
+          ACAD_ADD_URL: https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/add
+          ACAD_REMOVE_URL: https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/remove
+          NACAD_ADD_URL: https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/add
+          NACAD_REMOVE_URL: https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/remove
+      
         run: |
           set -e
           urls=(
-            "https://<CASS_MAILMAN_URL>/add"
-            "https://<CASS_MAILMAN_URL>/remove"
-            "https://<ACAD_MAILMAN_URL>/add"
-            "https://<ACAD_MAILMAN_URL>/remove"
-            "https://<NACAD_MAILMAN_URL>/add"
-            "https://<NACAD_MAILMAN_URL>/remove"
+            "$CASS_ADD_URL"
+            "$CASS_REMOVE_URL"
+            "$ACAD_ADD_URL"
+            "$ACAD_REMOVE_URL"
+            "$NACAD_ADD_URL"
+            "$NACAD_REMOVE_URL"
           )
           pws=(
             "$CASS_ADD_PW"
