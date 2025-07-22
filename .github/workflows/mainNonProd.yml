@@ -1,27 +1,28 @@
-name: Mailman Listserv Workflow (Non-Production)
-
+name: Non-Prod mailman automation
 on:
   workflow_dispatch:
 
-env:
-  SN_URL: https://utsdevesm.service-now.com
-
 jobs:
-  collect-tasks:
-    name: Collect All Mailman Listserv Tasks and Requested For Emails
+  mailman-automation:
     runs-on: ubuntu-latest
-    outputs:
-      task_matrix: ${{ steps.collect.outputs.task_matrix }}
-    steps:
-      - name: Install jq and python3
-        run: sudo apt-get update && sudo apt-get install -y jq python3
 
-      - name: Collect all 6 task lists and requested_for emails
-        id: collect
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install requirements (jq, Python, Selenium, Chrome)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip jq chromium-browser
+          python3 -m pip install --upgrade pip
+          pip3 install selenium webdriver-manager
+
+      # Step 1: Fetch relevant ServiceNow tasks into 6 groups, print all arrays
+      - name: Fetch ServiceNow tasks grouped by type
+        id: fetch-tasks
         env:
-          SN_USERNAME: ${{ secrets.SERVICECONNECT_USERNAME }}
-          SN_PASSWORD: ${{ secrets.SERVICECONNECT_PASSWORD }}
-          SN_URL: ${{ env.SN_URL }}
+          SN_USER: ${{ secrets.SERVICECONNECT_USERNAME }}
+          SN_PASS: ${{ secrets.SERVICECONNECT_PASSWORD }}
         run: |
           DESCS=(
             "Add user to CASS ebrief."
@@ -31,175 +32,133 @@ jobs:
             "Add user to non-Academic ebrief"
             "Remove user from non-Academic ebrief"
           )
-          LIST_NAMES=(
-            "cass-add"
-            "cass-remove"
-            "academic-add"
-            "academic-remove"
-            "nonacademic-add"
-            "nonacademic-remove"
-          )
-
-          MATRIX="[]"
-
-          for IDX in "${!DESCS[@]}"; do
-            DESC="${DESCS[$IDX]}"
-            LIST_NAME="${LIST_NAMES[$IDX]}"
+          ARRAY_NAMES=(CASS_ADD CASS_REMOVE ACAD_ADD ACAD_REMOVE NACAD_ADD NACAD_REMOVE)
+          for i in {0..5}; do
+            DESC="${DESCS[$i]}"
+            NAME="${ARRAY_NAMES[$i]}"
+            # Build and encode query
             QUERY="active=true^state=1^short_description=$DESC"
             ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${QUERY}'))")
-            TASKS_URL="$SN_URL/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number,request_item"
-            RESPONSE=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" "$TASKS_URL")
-
-            TASK_NUMBERS=$(echo "$RESPONSE" | jq -r '[.result[].number]')
-            REQUEST_ITEMS=$(echo "$RESPONSE" | jq -r '[.result[].request_item.value]')
-
-            LEN=$(echo "$TASK_NUMBERS" | jq 'length')
-            for ((i=0;i<$LEN;i++)); do
-              TASK_NUM=$(echo "$TASK_NUMBERS" | jq -r ".[$i]")
-              RITM_SYSID=$(echo "$REQUEST_ITEMS" | jq -r ".[$i]")
-
-              if [[ "$RITM_SYSID" != "null" && "$RITM_SYSID" != "" ]]; then
-                REQUESTED_FOR_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
-                  "$SN_URL/api/now/table/sc_req_item?sysparm_query=sys_id=${RITM_SYSID}&sysparm_fields=requested_for" | jq -r '.result[0].requested_for.value')
-                EMAIL=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
-                  "$SN_URL/api/now/table/sys_user?sysparm_query=sys_id=${REQUESTED_FOR_SYSID}&sysparm_fields=email" | jq -r '.result[0].email // ""')
-              else
-                EMAIL=""
-              fi
-
-              # Add to matrix
-              MATRIX=$(echo "$MATRIX" | jq \
-                --arg task_num "$TASK_NUM" \
-                --arg email "$EMAIL" \
-                --arg list_name "$LIST_NAME" \
-                '. + [{"task_num": $task_num, "email": $email, "list_name": $list_name}]')
-            done
+            URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number"
+            RESP=$(curl -s -u "$SN_USER:$SN_PASS" -H "Accept: application/json" "$URL")
+            ARR=$(echo "$RESP" | jq -c '[.result[].number]')
+            echo "Fetched $NAME numbers: $ARR"
+            echo "$NAME=$ARR" >> $GITHUB_ENV
           done
 
-          echo "$MATRIX" > matrix.json
-          echo "task_matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
-
-      - name: Show collected matrix
-        run: cat matrix.json
-
-      - name: Check if matrix is empty
-        run: |
-          if [ "$(jq 'length' matrix.json)" -eq "0" ]; then
-            echo "No tasks found. Exiting."
-            exit 78
-          fi
-
-  mailman-action:
-    name: Add or Remove User from Listserv
-    needs: collect-tasks
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include: ${{ fromJson(needs.collect-tasks.outputs.task_matrix) }}
-    outputs:
-      result: ${{ steps.mailman.outputs.result }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.11
-      - name: Install Selenium and Chrome
-        run: |
-          pip install selenium pyyaml
-          sudo apt-get update
-          sudo apt-get install -y chromium-driver chromium-browser
-      - name: Add or Remove User from Listserv
-        id: mailman
+      # Step 2: For each group, fetch email addresses and print arrays as [task, email]
+      - name: Fetch emails for all tasks for each group
+        id: fetch-emails
         env:
-          # Add more secrets as needed for each real list
-          LISTSERV_PASSWORD: ${{ secrets.TESTPASSWORD }}
+          SN_USER: ${{ secrets.SERVICECONNECT_USERNAME }}
+          SN_PASS: ${{ secrets.SERVICECONNECT_PASSWORD }}
+          CASS_ADD: ${{ env.CASS_ADD }}
+          CASS_REMOVE: ${{ env.CASS_REMOVE }}
+          ACAD_ADD: ${{ env.ACAD_ADD }}
+          ACAD_REMOVE: ${{ env.ACAD_REMOVE }}
+          NACAD_ADD: ${{ env.NACAD_ADD }}
+          NACAD_REMOVE: ${{ env.NACAD_REMOVE }}
         run: |
-          # Map list_name to URL and password_secret if you want
-          # For this demo, we use dummy URLs -- you should replace or expand as needed
-          declare -A URLS=(
-            ["cass-add"]="https://example.com/cass/add"
-            ["cass-remove"]="https://example.com/cass/remove"
-            ["academic-add"]="https://example.com/academic/add"
-            ["academic-remove"]="https://example.com/academic/remove"
-            ["nonacademic-add"]="https://example.com/nonacademic/add"
-            ["nonacademic-remove"]="https://example.com/nonacademic/remove"
-          )
-          declare -A MODES=(
-            ["cass-add"]="add"
-            ["cass-remove"]="remove"
-            ["academic-add"]="add"
-            ["academic-remove"]="remove"
-            ["nonacademic-add"]="add"
-            ["nonacademic-remove"]="remove"
-          )
+          fetch_emails() {
+            local arr_name="$1"
+            local nums_json="$2"
+            nums=$(echo "$nums_json" | jq -r '.[]')
+            declare -a output_arr=()
+            for num in $nums; do
+              RITM_SYSID=$(curl -s -u "$SN_USER:$SN_PASS" \
+                -H "Accept: application/json" \
+                "https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=number=${num}&sysparm_fields=request_item" \
+                | jq -r '.result[0].request_item.value // empty')
+              [ -z "$RITM_SYSID" ] && output_arr+=( "[\"$num\",\"error-No request_item\"]" ) && continue
+              REQ_FOR_SYSID=$(curl -s -u "$SN_USER:$SN_PASS" \
+                -H "Accept: application/json" \
+                "https://utsdevesm.service-now.com/api/now/table/sc_req_item?sysparm_query=sys_id=${RITM_SYSID}&sysparm_fields=requested_for" \
+                | jq -r '.result[0].requested_for.value // empty')
+              [ -z "$REQ_FOR_SYSID" ] && output_arr+=( "[\"$num\",\"error-No requested_for\"]" ) && continue
+              EMAIL=$(curl -s -u "$SN_USER:$SN_PASS" \
+                -H "Accept: application/json" \
+                "https://utsdevesm.service-now.com/api/now/table/sys_user?sysparm_query=sys_id=${REQ_FOR_SYSID}&sysparm_fields=email" \
+                | jq -r '.result[0].email // empty')
+              [ -z "$EMAIL" ] && output_arr+=( "[\"$num\",\"error-Email not found\"]" ) && continue
+              output_arr+=( "[\"$num\",\"$EMAIL\"]" )
+            done
+            if (( ${#output_arr[@]} )); then
+              printf -v finalarr '[%s]' "$(IFS=,; echo "${output_arr[*]}")"
+            else
+              finalarr='[]'
+            fi
+            echo "Email pairs for $arr_name: $finalarr"
+            # Export for later job steps
+            echo "${arr_name}_EMAILS=$finalarr" >> $GITHUB_ENV
+          }
+          fetch_emails "CASS_ADD" "$CASS_ADD"
+          fetch_emails "CASS_REMOVE" "$CASS_REMOVE"
+          fetch_emails "ACAD_ADD" "$ACAD_ADD"
+          fetch_emails "ACAD_REMOVE" "$ACAD_REMOVE"
+          fetch_emails "NACAD_ADD" "$NACAD_ADD"
+          fetch_emails "NACAD_REMOVE" "$NACAD_REMOVE"
 
-          LIST_NAME="${{ matrix.list_name }}"
-          URL="${URLS[$LIST_NAME]}"
-          MODE="${MODES[$LIST_NAME]}"
-          EMAIL="${{ matrix.email }}"
-
-          # Only run if URL and email is present
-          if [[ -n "$URL" && -n "$EMAIL" && "$EMAIL" != "null" ]]; then
-            python3 scripts/listserv_mailman.py \
-              --action "$MODE" \
-              --url "$URL" \
-              --password "$LISTSERV_PASSWORD" \
-              --email "$EMAIL" \
-              > result.txt
-            cat result.txt
-            echo "result=$(cat result.txt)" >> $GITHUB_OUTPUT
-          else
-            echo "Skipping (no URL or email for $LIST_NAME / $EMAIL)"
-            echo "result=skipped" >> $GITHUB_OUTPUT
-          fi
-
-  update-task:
-    name: Update and Close ServiceNow Task
-    needs: [collect-tasks, mailman-action]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include: ${{ fromJson(needs.collect-tasks.outputs.task_matrix) }}
-    steps:
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Update ServiceNow Task
+      # --- Step 3 --- Selenium for non-academic test list only, call external scripts
+      - name: Add non-academic emails (Selenium)
+        id: add-nonacad
         env:
-          SN_USERNAME: ${{ secrets.SERVICECONNECT_USERNAME }}
-          SN_PASSWORD: ${{ secrets.SERVICECONNECT_PASSWORD }}
-          SN_URL: ${{ env.SN_URL }}
+          TESTPASSWORD: ${{ secrets.TESTPASSWORD }}
+          NACAD_ADD_EMAILS: ${{ env.NACAD_ADD_EMAILS }}
         run: |
-          TASK_NUM="${{ matrix.task_num }}"
-          EMAIL="${{ matrix.email }}"
-          LIST_NAME="${{ matrix.list_name }}"
-          MODE="add"
-          [[ "$LIST_NAME" == *remove ]] && MODE="remove"
-          RESPONSE=$(cat result.txt 2>/dev/null || echo "")
-          if [[ "$MODE" == "add" ]]; then
-            WORK_NOTES="$RESPONSE"
-          else
-            WORK_NOTES="$EMAIL - removed for ebrief"
-          fi
-          TASK_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" \
-            -H "Accept: application/json" \
-            "$SN_URL/api/now/table/sc_task?sysparm_query=number=${TASK_NUM}&sysparm_fields=sys_id" | jq -r '.result[0].sys_id')
-          CI_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" \
-            -H "Accept: application/json" \
-            "$SN_URL/api/now/table/cmdb_ci?sysparm_query=name=Listserv&sysparm_fields=sys_id" | jq -r '.result[0].sys_id')
-          if [[ -n "$TASK_SYSID" && "$TASK_SYSID" != "null" && -n "$CI_SYSID" && "$CI_SYSID" != "null" ]]; then
-            curl -s -u "$SN_USERNAME:$SN_PASSWORD" \
-              -X PATCH \
-              -H "Content-Type: application/json" \
-              -d '{
-                    "state": "3",
-                    "cmdb_ci": "'"${CI_SYSID}"'",
-                    "work_notes": "'"${WORK_NOTES}"'"
-                  }' \
-              "$SN_URL/api/now/table/sc_task/${TASK_SYSID}"
-            echo "✅ Task updated and CI assigned"
-          else
-            echo "❌ Could not resolve sys_id for task (${TASK_SYSID}) or CI (${CI_SYSID})"
-            exit 1
-          fi
+          echo "$NACAD_ADD_EMAILS" > add_targets.json
+          python3 scripts/add_member_from_listserv.py add_targets.json "https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/add" "$TESTPASSWORD" add_results.json
+          cat add_results.json
+
+      - name: Remove non-academic emails (Selenium)
+        id: remove-nonacad
+        env:
+          TESTPASSWORD: ${{ secrets.TESTPASSWORD }}
+          NACAD_REMOVE_EMAILS: ${{ env.NACAD_REMOVE_EMAILS }}
+        run: |
+          echo "$NACAD_REMOVE_EMAILS" > remove_targets.json
+          python3 scripts/remove_member_from_listserv.py remove_targets.json "https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/remove" "$TESTPASSWORD" remove_results.json
+          cat remove_results.json
+
+      # Final Step: Update ServiceNow sc_task with results and close/annotate task where required
+      - name: Update ServiceNow tasks with results
+        env:
+          SN_USER: ${{ secrets.SERVICECONNECT_USERNAME }}
+          SN_PASS: ${{ secrets.SERVICECONNECT_PASSWORD }}
+        run: |
+          update_task() {
+            local TASK="$1"; local NOTE="$2"; local RESULT="$3"
+            # Always update work_notes
+            curl -s -u "$SN_USER:$SN_PASS" \
+              --request PATCH \
+              --header "Content-Type: application/json" \
+              --data "{\"work_notes\": \"$NOTE\"}" \
+              "https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=number=${TASK}" > /dev/null
+            # Do we want to close the ticket and set config item?
+            if [[ ! "$RESULT" =~ ^error ]]; then
+              curl -s -u "$SN_USER:$SN_PASS" \
+                --request PATCH \
+                --header "Content-Type: application/json" \
+                --data '{"state":"3","cmdb_ci":{"display_value":"Listserv"}}' \
+                "https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=number=${TASK}" > /dev/null
+              echo "Closed and set Listserv CI for $TASK"
+            else
+              echo "Left $TASK open due to error: $RESULT"
+            fi
+          }
+
+          # Read results from JSONs
+          [ -f add_results.json ] && ADDLIST="$(cat add_results.json)" || ADDLIST="[]"
+          [ -f remove_results.json ] && REMOVELIST="$(cat remove_results.json)" || REMOVELIST="[]"
+          # Merge and process
+          echo "$ADDLIST" | jq -c '.[]' | while read row; do
+            TASK=$(echo "$row" | jq -r '.[0]')
+            EMAIL=$(echo "$row" | jq -r '.[1]')
+            RESULT=$(echo "$row" | jq -r '.[2]')
+            update_task "$TASK" "Mailman add($EMAIL): $RESULT" "$RESULT"
+          done
+          echo "$REMOVELIST" | jq -c '.[]' | while read row; do
+            TASK=$(echo "$row" | jq -r '.[0]')
+            EMAIL=$(echo "$row" | jq -r '.[1]')
+            RESULT=$(echo "$row" | jq -r '.[2]')
+            update_task "$TASK" "Mailman remove($EMAIL): $RESULT" "$RESULT"
+          done
