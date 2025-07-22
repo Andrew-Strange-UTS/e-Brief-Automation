@@ -1,4 +1,5 @@
 name: Non-Prod mailman automation
+
 on:
   workflow_dispatch:
 
@@ -17,26 +18,18 @@ jobs:
           python3 -m pip install --upgrade pip
           pip3 install selenium webdriver-manager
 
-      # Step 1: Fetch relevant ServiceNow tasks into 6 groups, print all arrays
+      # Step 1: Fetch relevant ServiceNow tasks into 6 groups
       - name: Fetch ServiceNow tasks grouped by type
         id: fetch-tasks
         env:
           SN_USER: ${{ secrets.SERVICECONNECT_USERNAME }}
           SN_PASS: ${{ secrets.SERVICECONNECT_PASSWORD }}
         run: |
-          DESCS=(
-            "Add user to CASS ebrief."
-            "Remove user to CASS ebrief."
-            "Add user to Academic ebrief"
-            "Remove user Academic ebrief"
-            "Add user to non-Academic ebrief"
-            "Remove user from non-Academic ebrief"
-          )
+          DESCS=("Add user to CASS ebrief." "Remove user to CASS ebrief." "Add user to Academic ebrief" "Remove user Academic ebrief" "Add user to non-Academic ebrief" "Remove user from non-Academic ebrief")
           ARRAY_NAMES=(CASS_ADD CASS_REMOVE ACAD_ADD ACAD_REMOVE NACAD_ADD NACAD_REMOVE)
           for i in {0..5}; do
             DESC="${DESCS[$i]}"
             NAME="${ARRAY_NAMES[$i]}"
-            # Build and encode query
             QUERY="active=true^state=1^short_description=$DESC"
             ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${QUERY}'))")
             URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number"
@@ -88,7 +81,6 @@ jobs:
               finalarr='[]'
             fi
             echo "Email pairs for $arr_name: $finalarr"
-            # Export for later job steps
             echo "${arr_name}_EMAILS=$finalarr" >> $GITHUB_ENV
           }
           fetch_emails "CASS_ADD" "$CASS_ADD"
@@ -98,51 +90,94 @@ jobs:
           fetch_emails "NACAD_ADD" "$NACAD_ADD"
           fetch_emails "NACAD_REMOVE" "$NACAD_REMOVE"
 
-      # --- Step 3 --- Selenium for non-academic test list only, call external scripts
-      # WRITE PAIRS TO FILE
-      - name: Write email pairs to input files
+      # Step 3: Build the main 6x3 array [[tasks],[emails],[responses]]
+      - name: Build main array structure for mailman work
+        id: build-main-array
         run: |
-          echo '${{ env.CASS_ADD_EMAILS }}' > inputs_cass_add.json
-          echo '${{ env.CASS_REMOVE_EMAILS }}' > inputs_cass_remove.json
-          echo '${{ env.ACAD_ADD_EMAILS }}' > inputs_acad_add.json
-          echo '${{ env.ACAD_REMOVE_EMAILS }}' > inputs_acad_remove.json
-          echo '${{ env.NACAD_ADD_EMAILS }}' > inputs_nacad_add.json
-          echo '${{ env.NACAD_REMOVE_EMAILS }}' > inputs_nacad_remove.json
+          groups=("CASS_ADD" "CASS_REMOVE" "ACAD_ADD" "ACAD_REMOVE" "NACAD_ADD" "NACAD_REMOVE")
+          main_array="["
+          for i in "${!groups[@]}"; do
+            val="${groups[$i]}_EMAILS"
+            arr_json="${!val}"
+            tasks=$(echo "$arr_json" | jq '[.[].0]')
+            emails=$(echo "$arr_json" | jq '[.[].1]')
+            responses="[]"
+            group_part="[$tasks,$emails,$responses]"
+            main_array+="$group_part"
+            if [ "$i" -lt 5 ]; then main_array+=","; fi
+          done
+          main_array+="]"
+          echo "$main_array" > mailman_main_array.json
+          cat mailman_main_array.json
 
-      # ---- RUN FOR EACH LIST ----
-
-      - name: Add CASS members
+      # Step 4: Run mailman scripts, update main array with responses
+      - name: Add/remove members for all lists and fill in responses
+        env:
+          CASS_ADD_PW: ${{ secrets.CASS_PASSWORD }}
+          CASS_REMOVE_PW: ${{ secrets.CASS_PASSWORD }}
+          ACAD_ADD_PW: ${{ secrets.ACAD_PASSWORD }}
+          ACAD_REMOVE_PW: ${{ secrets.ACAD_PASSWORD }}
+          NACAD_ADD_PW: ${{ secrets.NACAD_PASSWORD }}
+          NACAD_REMOVE_PW: ${{ secrets.NACAD_PASSWORD }}
         run: |
-          python3 scripts/add_member_from_listserv.py inputs_cass_add.json "https://<CASS_MAILMAN_URL>/add" "${{ secrets.CASS_PASSWORD }}" cass_add_results.json
-          cat cass_add_results.json
+          #!/bin/bash
+          set -e
+          urls=(
+            "https://<CASS_MAILMAN_URL>/add"
+            "https://<CASS_MAILMAN_URL>/remove"
+            "https://<ACAD_MAILMAN_URL>/add"
+            "https://<ACAD_MAILMAN_URL>/remove"
+            "https://<NACAD_MAILMAN_URL>/add"
+            "https://<NACAD_MAILMAN_URL>/remove"
+          )
+          pws=(
+            "$CASS_ADD_PW"
+            "$CASS_REMOVE_PW"
+            "$ACAD_ADD_PW"
+            "$ACAD_REMOVE_PW"
+            "$NACAD_ADD_PW"
+            "$NACAD_REMOVE_PW"
+          )
+          # Prep output array
+          updated_main_array="["
+          for idx in {0..5}; do
+            arr=$(jq ".[$idx]" mailman_main_array.json)
+            tasks=($(echo "$arr" | jq -r '.[0][]'))
+            emails=($(echo "$arr" | jq -r '.[1][]'))
+            responses=()
+            for j in "${!emails[@]}"; do
+              email="${emails[$j]}"
+              # skip empty/error emails
+              if [[ "$email" == error* ]]; then
+                resp="error-email-lookup"
+              else
+                if [[ $idx =~ ^(0|2|4)$ ]]; then
+                  resp=$(python3 scripts/add_member_from_listserv.py "$email" "${urls[$idx]}" "${pws[$idx]}")
+                else
+                  resp=$(python3 scripts/remove_member_from_listserv.py "$email" "${urls[$idx]}" "${pws[$idx]}")
+                fi
+              fi
+              # support if response is multiline
+              resp=$(echo "$resp" | sed ':a;N;$!ba;s/\n/\\n/g')
+              responses+=("\"$resp\"")
+            done
+            joined_responses=$(printf "%s," "${responses[@]}")
+            # Remove trailing comma
+            joined_responses="[${joined_responses%,}]"
+            tasks_json=$(echo "$arr" | jq '.[0]')
+            emails_json=$(echo "$arr" | jq '.[1]')
+            group="[${tasks_json},${emails_json},${joined_responses}]"
+            if [ $idx -eq 0 ]; then
+              updated_main_array+="$group"
+            else
+              updated_main_array+=",$group"
+            fi
+          done
+          updated_main_array+="]"
+          echo "$updated_main_array" > mailman_main_array_with_results.json
+          cat mailman_main_array_with_results.json
 
-      - name: Remove CASS members
-        run: |
-          python3 scripts/remove_member_from_listserv.py inputs_cass_remove.json "https://<CASS_MAILMAN_URL>/remove" "${{ secrets.CASS_PASSWORD }}" cass_remove_results.json
-          cat cass_remove_results.json
-
-      - name: Add Academic members
-        run: |
-          python3 scripts/add_member_from_listserv.py inputs_acad_add.json "https://<ACAD_MAILMAN_URL>/add" "${{ secrets.ACAD_PASSWORD }}" acad_add_results.json
-          cat acad_add_results.json
-
-      - name: Remove Academic members
-        run: |
-          python3 scripts/remove_member_from_listserv.py inputs_acad_remove.json "https://<ACAD_MAILMAN_URL>/remove" "${{ secrets.ACAD_PASSWORD }}" acad_remove_results.json
-          cat acad_remove_results.json
-
-      - name: Add Non-academic members
-        run: |
-          python3 scripts/add_member_from_listserv.py inputs_nacad_add.json "https://<NACAD_MAILMAN_URL>/add" "${{ secrets.NACAD_PASSWORD }}" nacad_add_results.json
-          cat nacad_add_results.json
-
-      - name: Remove Non-academic members
-        run: |
-          python3 scripts/remove_member_from_listserv.py inputs_nacad_remove.json "https://<NACAD_MAILMAN_URL>/remove" "${{ secrets.NACAD_PASSWORD }}" nacad_remove_results.json
-          cat nacad_remove_results.json
-
-
-      # Final Step: Update ServiceNow sc_task with results and close/annotate task where required
+      # Step 5: Update ServiceNow sc_task with the FINAL results and close/annotate task where required
       - name: Update ServiceNow tasks with results
         env:
           SN_USER: ${{ secrets.SERVICECONNECT_USERNAME }}
@@ -150,13 +185,11 @@ jobs:
         run: |
           update_task() {
             local TASK="$1"; local NOTE="$2"; local RESULT="$3"
-            # Always update work_notes
             curl -s -u "$SN_USER:$SN_PASS" \
               --request PATCH \
               --header "Content-Type: application/json" \
               --data "{\"work_notes\": \"$NOTE\"}" \
               "https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=number=${TASK}" > /dev/null
-            # Do we want to close the ticket and set config item?
             if [[ ! "$RESULT" =~ ^error ]]; then
               curl -s -u "$SN_USER:$SN_PASS" \
                 --request PATCH \
@@ -168,20 +201,17 @@ jobs:
               echo "Left $TASK open due to error: $RESULT"
             fi
           }
-
-          # Read results from JSONs
-          [ -f add_results.json ] && ADDLIST="$(cat add_results.json)" || ADDLIST="[]"
-          [ -f remove_results.json ] && REMOVELIST="$(cat remove_results.json)" || REMOVELIST="[]"
-          # Merge and process
-          echo "$ADDLIST" | jq -c '.[]' | while read row; do
-            TASK=$(echo "$row" | jq -r '.[0]')
-            EMAIL=$(echo "$row" | jq -r '.[1]')
-            RESULT=$(echo "$row" | jq -r '.[2]')
-            update_task "$TASK" "Mailman add($EMAIL): $RESULT" "$RESULT"
-          done
-          echo "$REMOVELIST" | jq -c '.[]' | while read row; do
-            TASK=$(echo "$row" | jq -r '.[0]')
-            EMAIL=$(echo "$row" | jq -r '.[1]')
-            RESULT=$(echo "$row" | jq -r '.[2]')
-            update_task "$TASK" "Mailman remove($EMAIL): $RESULT" "$RESULT"
+          # Process all 6 groups
+          for g in {0..5}; do
+            arr=$(jq ".[$g]" mailman_main_array_with_results.json)
+            tasks=($(echo "$arr" | jq -r '.[0][]'))
+            emails=($(echo "$arr" | jq -r '.[1][]'))
+            results=($(echo "$arr" | jq -r '.[2][]'))
+            count=${#tasks[@]}
+            for idx in $(seq 0 $((count-1))); do
+              t="${tasks[$idx]}"
+              e="${emails[$idx]}"
+              r="${results[$idx]}"
+              update_task "$t" "Mailman: $e : $r" "$r"
+            done
           done
