@@ -1,0 +1,43 @@
+name: Print All Task List Numbers
+
+on:
+  workflow_dispatch:
+
+env:
+  SN_URL: https://utsdevesm.service-now.com
+
+jobs:
+  print-tasks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install jq and curl
+        run: sudo apt-get update && sudo apt-get install -y jq curl
+
+      - name: Print All Task List Numbers
+        env:
+          SN_USERNAME: ${{ secrets.SERVICECONNECTUSERNAME }}
+          SN_PASSWORD: ${{ secrets.SERVICECONNECTPASSWORD }}
+          SN_URL: ${{ env.SN_URL }}
+        run: |
+          # Define the 6 descriptions
+          DESCS=(
+            "Add user to CASS ebrief."
+            "Remove user to CASS ebrief."
+            "Add user to Academic ebrief"
+            "Remove user Academic ebrief"
+            "Add user to non-Academic ebrief"
+            "Remove user from non-Academic ebrief"
+          )
+          for DESC in "${DESCS[@]}"; do
+            echo "=== $DESC ==="
+            TASKS=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" \
+              -H "Accept: application/json" \
+              "$SN_URL/api/now/table/sc_task?sysparm_query=active=true^state=1^short_description=$(python3 -c "import urllib.parse; print(urllib.parse.quote('''$DESC'''))")&sysparm_fields=number" \
+              | jq -r '.result[].number')
+            if [ -z "$TASKS" ]; then
+              echo "No tasks found."
+            else
+              echo "$TASKS"
+            fi
+            echo ""
+          done
