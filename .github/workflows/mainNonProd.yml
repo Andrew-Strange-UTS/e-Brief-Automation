@@ -8,39 +8,78 @@ env:
 
 jobs:
   collect-tasks:
-    name: Build Task Matrix from List YAML
+    name: Collect All Mailman Listserv Tasks and Requested For Emails
     runs-on: ubuntu-latest
     outputs:
-      task_matrix: ${{ steps.build_matrix.outputs.matrix }}
+      task_matrix: ${{ steps.collect.outputs.task_matrix }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.11
-      - name: Install Python dependencies
-        run: |
-          pip install requests pyyaml
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-      - name: Build matrix from YAML env
-        id: build_matrix
+      - name: Install jq and python3
+        run: sudo apt-get update && sudo apt-get install -y jq python3
+
+      - name: Collect all 6 task lists and requested_for emails
+        id: collect
         env:
           SN_USERNAME: ${{ secrets.SERVICECONNECT_USERNAME }}
           SN_PASSWORD: ${{ secrets.SERVICECONNECT_PASSWORD }}
           SN_URL: ${{ env.SN_URL }}
-          LISTS_YAML: |
-            - name: TestList
-              add_desc: "Add user to test ebrief"
-              remove_desc: "Remove user from test ebrief"
-              add_url: "https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/add"
-              remove_url: "https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/remove"
-              password_secret: "TESTPASSWORD"
         run: |
-          python3 scripts/build_matrix.py > matrix.json
-          echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
+          DESCS=(
+            "Add user to CASS ebrief."
+            "Remove user to CASS ebrief."
+            "Add user to Academic ebrief"
+            "Remove user Academic ebrief"
+            "Add user to non-Academic ebrief"
+            "Remove user from non-Academic ebrief"
+          )
+          LIST_NAMES=(
+            "cass-add"
+            "cass-remove"
+            "academic-add"
+            "academic-remove"
+            "nonacademic-add"
+            "nonacademic-remove"
+          )
 
-      - name: Show matrix.json
+          MATRIX="[]"
+
+          for IDX in "${!DESCS[@]}"; do
+            DESC="${DESCS[$IDX]}"
+            LIST_NAME="${LIST_NAMES[$IDX]}"
+            QUERY="active=true^state=1^short_description=$DESC"
+            ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${QUERY}'))")
+            TASKS_URL="$SN_URL/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number,request_item"
+            RESPONSE=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" "$TASKS_URL")
+
+            TASK_NUMBERS=$(echo "$RESPONSE" | jq -r '[.result[].number]')
+            REQUEST_ITEMS=$(echo "$RESPONSE" | jq -r '[.result[].request_item.value]')
+
+            LEN=$(echo "$TASK_NUMBERS" | jq 'length')
+            for ((i=0;i<$LEN;i++)); do
+              TASK_NUM=$(echo "$TASK_NUMBERS" | jq -r ".[$i]")
+              RITM_SYSID=$(echo "$REQUEST_ITEMS" | jq -r ".[$i]")
+
+              if [[ "$RITM_SYSID" != "null" && "$RITM_SYSID" != "" ]]; then
+                REQUESTED_FOR_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
+                  "$SN_URL/api/now/table/sc_req_item?sysparm_query=sys_id=${RITM_SYSID}&sysparm_fields=requested_for" | jq -r '.result[0].requested_for.value')
+                EMAIL=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
+                  "$SN_URL/api/now/table/sys_user?sysparm_query=sys_id=${REQUESTED_FOR_SYSID}&sysparm_fields=email" | jq -r '.result[0].email // ""')
+              else
+                EMAIL=""
+              fi
+
+              # Add to matrix
+              MATRIX=$(echo "$MATRIX" | jq \
+                --arg task_num "$TASK_NUM" \
+                --arg email "$EMAIL" \
+                --arg list_name "$LIST_NAME" \
+                '. + [{"task_num": $task_num, "email": $email, "list_name": $list_name}]')
+            done
+          done
+
+          echo "$MATRIX" > matrix.json
+          echo "task_matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
+
+      - name: Show collected matrix
         run: cat matrix.json
 
       - name: Check if matrix is empty
@@ -50,42 +89,9 @@ jobs:
             exit 78
           fi
 
-  get-emails:
-    name: Get Requested For Emails for Each Task
-    needs: collect-tasks
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include: ${{ fromJson(needs.collect-tasks.outputs.task_matrix) }}
-    outputs:
-      email: ${{ steps.get_email.outputs.email }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.11
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-      - name: Get Requested For Email
-        id: get_email
-        env:
-          SN_USERNAME: ${{ secrets.SERVICECONNECT_USERNAME }}
-          SN_PASSWORD: ${{ secrets.SERVICECONNECT_PASSWORD }}
-          SN_URL: ${{ env.SN_URL }}
-        run: |
-          TASK_NUM="${{ matrix.task_num }}"
-          RITM_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
-            "$SN_URL/api/now/table/sc_task?sysparm_query=number=${TASK_NUM}&sysparm_fields=request_item" | jq -r '.result[0].request_item.value')
-          REQUESTED_FOR_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
-            "$SN_URL/api/now/table/sc_req_item?sysparm_query=sys_id=${RITM_SYSID}&sysparm_fields=requested_for" | jq -r '.result[0].requested_for.value')
-          EMAIL=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
-            "$SN_URL/api/now/table/sys_user?sysparm_query=sys_id=${REQUESTED_FOR_SYSID}&sysparm_fields=email" | jq -r '.result[0].email // ""')
-          echo "email=$EMAIL" >> $GITHUB_OUTPUT
-
   mailman-action:
     name: Add or Remove User from Listserv
-    needs: [collect-tasks, get-emails]
+    needs: collect-tasks
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -106,19 +112,51 @@ jobs:
       - name: Add or Remove User from Listserv
         id: mailman
         env:
+          # Add more secrets as needed for each real list
           LISTSERV_PASSWORD: ${{ secrets.TESTPASSWORD }}
         run: |
-          python3 scripts/listserv_mailman.py \
-            --action "${{ matrix.mode }}" \
-            --url "${{ matrix.url }}" \
-            --password "$LISTSERV_PASSWORD" \
-            --email "${{ needs.get-emails.outputs.email }}" \
-            > result.txt
-          echo "result=$(cat result.txt)" >> $GITHUB_OUTPUT
+          # Map list_name to URL and password_secret if you want
+          # For this demo, we use dummy URLs -- you should replace or expand as needed
+          declare -A URLS=(
+            ["cass-add"]="https://example.com/cass/add"
+            ["cass-remove"]="https://example.com/cass/remove"
+            ["academic-add"]="https://example.com/academic/add"
+            ["academic-remove"]="https://example.com/academic/remove"
+            ["nonacademic-add"]="https://example.com/nonacademic/add"
+            ["nonacademic-remove"]="https://example.com/nonacademic/remove"
+          )
+          declare -A MODES=(
+            ["cass-add"]="add"
+            ["cass-remove"]="remove"
+            ["academic-add"]="add"
+            ["academic-remove"]="remove"
+            ["nonacademic-add"]="add"
+            ["nonacademic-remove"]="remove"
+          )
+
+          LIST_NAME="${{ matrix.list_name }}"
+          URL="${URLS[$LIST_NAME]}"
+          MODE="${MODES[$LIST_NAME]}"
+          EMAIL="${{ matrix.email }}"
+
+          # Only run if URL and email is present
+          if [[ -n "$URL" && -n "$EMAIL" && "$EMAIL" != "null" ]]; then
+            python3 scripts/listserv_mailman.py \
+              --action "$MODE" \
+              --url "$URL" \
+              --password "$LISTSERV_PASSWORD" \
+              --email "$EMAIL" \
+              > result.txt
+            cat result.txt
+            echo "result=$(cat result.txt)" >> $GITHUB_OUTPUT
+          else
+            echo "Skipping (no URL or email for $LIST_NAME / $EMAIL)"
+            echo "result=skipped" >> $GITHUB_OUTPUT
+          fi
 
   update-task:
     name: Update and Close ServiceNow Task
-    needs: [collect-tasks, get-emails, mailman-action]
+    needs: [collect-tasks, mailman-action]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -126,6 +164,7 @@ jobs:
     steps:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Update ServiceNow Task
         env:
           SN_USERNAME: ${{ secrets.SERVICECONNECT_USERNAME }}
@@ -133,8 +172,10 @@ jobs:
           SN_URL: ${{ env.SN_URL }}
         run: |
           TASK_NUM="${{ matrix.task_num }}"
-          EMAIL="${{ needs.get-emails.outputs.email }}"
-          MODE="${{ matrix.mode }}"
+          EMAIL="${{ matrix.email }}"
+          LIST_NAME="${{ matrix.list_name }}"
+          MODE="add"
+          [[ "$LIST_NAME" == *remove ]] && MODE="remove"
           RESPONSE=$(cat result.txt 2>/dev/null || echo "")
           if [[ "$MODE" == "add" ]]; then
             WORK_NOTES="$RESPONSE"
