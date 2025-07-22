@@ -40,6 +40,16 @@ jobs:
           python3 scripts/build_matrix.py > matrix.json
           echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
 
+      - name: Show matrix.json
+        run: cat matrix.json
+
+      - name: Check if matrix is empty
+        run: |
+          if [ "$(jq 'length' matrix.json)" -eq "0" ]; then
+            echo "No tasks found. Exiting."
+            exit 78
+          fi
+
   get-emails:
     name: Get Requested For Emails for Each Task
     needs: collect-tasks
