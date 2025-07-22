@@ -7,15 +7,16 @@ jobs:
   fetch-tasks:
     runs-on: ubuntu-latest
     outputs:
-      cass_add:     ${{ steps.gen.outputs.cass_add }}
-      cass_remove:  ${{ steps.gen.outputs.cass_remove }}
-      acad_add:     ${{ steps.gen.outputs.acad_add }}
-      acad_remove:  ${{ steps.gen.outputs.acad_remove }}
-      nacad_add:    ${{ steps.gen.outputs.nacad_add }}
+      cass_add:      ${{ steps.gen.outputs.cass_add }}
+      cass_remove:   ${{ steps.gen.outputs.cass_remove }}
+      acad_add:      ${{ steps.gen.outputs.acad_add }}
+      acad_remove:   ${{ steps.gen.outputs.acad_remove }}
+      nacad_add:     ${{ steps.gen.outputs.nacad_add }}
       nacad_remove:  ${{ steps.gen.outputs.nacad_remove }}
     steps:
       - name: Install tools
         run: sudo apt-get update && sudo apt-get install -y jq python3
+
       - id: gen
         name: Fetch ServiceNow tasks for each list
         env:
@@ -29,7 +30,6 @@ jobs:
           DESC_ACAD_REMOVE="Remove user Academic ebrief"
           DESC_NACAD_ADD="Add user to non-Academic ebrief"
           DESC_NACAD_REMOVE="Remove user from non-Academic ebrief"
-
           # Helper function
           get_task_numbers() {
             local DESC="$1"
@@ -37,9 +37,8 @@ jobs:
             ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${QUERY}'))")
             URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number"
             RESPONSE=$(curl -s -u "$SN_USER:$SN_PASS" -H "Accept: application/json" "$URL")
-            echo "$RESPONSE" | jq '[.result[].number]'
+            echo "$RESPONSE" | jq -c '[.result[].number]'
           }
-
           # Get numbers for each type
           CASS_ADD=$(get_task_numbers "$DESC_CASS_ADD")
           CASS_REMOVE=$(get_task_numbers "$DESC_CASS_REMOVE")
@@ -47,20 +46,18 @@ jobs:
           ACAD_REMOVE=$(get_task_numbers "$DESC_ACAD_REMOVE")
           NACAD_ADD=$(get_task_numbers "$DESC_NACAD_ADD")
           NACAD_REMOVE=$(get_task_numbers "$DESC_NACAD_REMOVE")
-
           echo "CASS add tasks: $CASS_ADD"
           echo "CASS remove tasks: $CASS_REMOVE"
           echo "Academic add tasks: $ACAD_ADD"
           echo "Academic remove tasks: $ACAD_REMOVE"
           echo "Non-academic add tasks: $NACAD_ADD"
           echo "Non-academic remove tasks: $NACAD_REMOVE"
-
-          # Set outputs for the next job
-          echo "cass_add=$CASS_ADD"       >> $GITHUB_OUTPUT
+          # Set outputs for the next job (single line, no newlines)
+          echo "cass_add=$CASS_ADD" >> $GITHUB_OUTPUT
           echo "cass_remove=$CASS_REMOVE" >> $GITHUB_OUTPUT
-          echo "acad_add=$ACAD_ADD"       >> $GITHUB_OUTPUT
+          echo "acad_add=$ACAD_ADD" >> $GITHUB_OUTPUT
           echo "acad_remove=$ACAD_REMOVE" >> $GITHUB_OUTPUT
-          echo "nacad_add=$NACAD_ADD"     >> $GITHUB_OUTPUT
+          echo "nacad_add=$NACAD_ADD" >> $GITHUB_OUTPUT
           echo "nacad_remove=$NACAD_REMOVE" >> $GITHUB_OUTPUT
 
   fetch-emails:
@@ -70,7 +67,7 @@ jobs:
       - name: Install tools
         run: sudo apt-get update && sudo apt-get install -y jq python3
 
-      - name: Matrix fetch and print user emails for all lists
+      - name: Fetch and print user emails for all lists
         env:
           SN_USER: ${{ secrets.SERVICECONNECT_USERNAME }}
           SN_PASS: ${{ secrets.SERVICECONNECT_PASSWORD }}
@@ -92,24 +89,24 @@ jobs:
                 "https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=number=${num}&sysparm_fields=request_item" \
                 | jq -r '.result[0].request_item.value // empty')
               [ -z "$RITM_SYSID" ] && echo "No request_item for $num" && continue
-
               REQ_FOR_SYSID=$(curl -s -u "$SN_USER:$SN_PASS" -H "Accept: application/json" \
                 "https://utsdevesm.service-now.com/api/now/table/sc_req_item?sysparm_query=sys_id=${RITM_SYSID}&sysparm_fields=requested_for" \
                 | jq -r '.result[0].requested_for.value // empty')
               [ -z "$REQ_FOR_SYSID" ] && echo "No requested_for for $num" && continue
-
               EMAIL=$(curl -s -u "$SN_USER:$SN_PASS" -H "Accept: application/json" \
                 "https://utsdevesm.service-now.com/api/now/table/sys_user?sysparm_query=sys_id=${REQ_FOR_SYSID}&sysparm_fields=email" \
                 | jq -r '.result[0].email // empty')
-
               echo "[${num}] Requested for: $EMAIL"
               output_arr+=( "[\"$num\",\"$EMAIL\"]" )
             done
-            # Print the array for this list
-            printf -v finalarr '[%s]' "$(IFS=,; echo "${output_arr[*]}")"
+            # Print the array for this list (as JSON)
+            if (( ${#output_arr[@]} )); then
+              printf -v finalarr '[%s]' "$(IFS=,; echo "${output_arr[*]}")"
+            else
+              finalarr='[]'
+            fi
             echo "Emails for $list_name: $finalarr"
           }
-
           fetch_emails "CASS_ADD" "$CASS_ADD"
           fetch_emails "CASS_REMOVE" "$CASS_REMOVE"
           fetch_emails "ACAD_ADD" "$ACAD_ADD"
