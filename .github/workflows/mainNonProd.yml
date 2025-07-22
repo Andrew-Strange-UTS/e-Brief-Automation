@@ -1,5 +1,4 @@
 name: Non-Prod mailman automation
-
 on:
   workflow_dispatch:
 
@@ -18,99 +17,73 @@ jobs:
           python3 -m pip install --upgrade pip
           pip3 install selenium webdriver-manager
 
-      # Step 1: Fetch relevant ServiceNow tasks into 6 groups
-      - name: Fetch ServiceNow tasks grouped by type
-        id: fetch-tasks
+      - name: Fetch ServiceNow tasks, build main array structure
+        id: fetch-and-build-main-array
         env:
           SN_USER: ${{ secrets.SERVICECONNECT_USERNAME }}
           SN_PASS: ${{ secrets.SERVICECONNECT_PASSWORD }}
         run: |
-          DESCS=("Add user to CASS ebrief." "Remove user to CASS ebrief." "Add user to Academic ebrief" "Remove user Academic ebrief" "Add user to non-Academic ebrief" "Remove user from non-Academic ebrief")
-          ARRAY_NAMES=(CASS_ADD CASS_REMOVE ACAD_ADD ACAD_REMOVE NACAD_ADD NACAD_REMOVE)
+          set -e
+          DESCS=(
+            "Add user to CASS ebrief."
+            "Remove user to CASS ebrief."
+            "Add user to Academic ebrief"
+            "Remove user Academic ebrief"
+            "Add user to non-Academic ebrief"
+            "Remove user from non-Academic ebrief"
+          )
+          main_array="["
           for i in {0..5}; do
             DESC="${DESCS[$i]}"
-            NAME="${ARRAY_NAMES[$i]}"
+            # 1. Fetch tasks with state=1, active, matching description
             QUERY="active=true^state=1^short_description=$DESC"
             ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${QUERY}'))")
-            URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number"
-            RESP=$(curl -s -u "$SN_USER:$SN_PASS" -H "Accept: application/json" "$URL")
-            ARR=$(echo "$RESP" | jq -c '[.result[].number]')
-            echo "Fetched $NAME numbers: $ARR"
-            echo "$NAME=$ARR" >> $GITHUB_ENV
-          done
-
-      # Step 2: For each group, fetch email addresses and print arrays as [task, email]
-      - name: Fetch emails for all tasks for each group
-        id: fetch-emails
-        env:
-          SN_USER: ${{ secrets.SERVICECONNECT_USERNAME }}
-          SN_PASS: ${{ secrets.SERVICECONNECT_PASSWORD }}
-          CASS_ADD: ${{ env.CASS_ADD }}
-          CASS_REMOVE: ${{ env.CASS_REMOVE }}
-          ACAD_ADD: ${{ env.ACAD_ADD }}
-          ACAD_REMOVE: ${{ env.ACAD_REMOVE }}
-          NACAD_ADD: ${{ env.NACAD_ADD }}
-          NACAD_REMOVE: ${{ env.NACAD_REMOVE }}
-        run: |
-          fetch_emails() {
-            local arr_name="$1"
-            local nums_json="$2"
-            nums=$(echo "$nums_json" | jq -r '.[]')
-            declare -a output_arr=()
-            for num in $nums; do
-              RITM_SYSID=$(curl -s -u "$SN_USER:$SN_PASS" \
-                -H "Accept: application/json" \
-                "https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=number=${num}&sysparm_fields=request_item" \
-                | jq -r '.result[0].request_item.value // empty')
-              [ -z "$RITM_SYSID" ] && output_arr+=( "[\"$num\",\"error-No request_item\"]" ) && continue
-              REQ_FOR_SYSID=$(curl -s -u "$SN_USER:$SN_PASS" \
-                -H "Accept: application/json" \
-                "https://utsdevesm.service-now.com/api/now/table/sc_req_item?sysparm_query=sys_id=${RITM_SYSID}&sysparm_fields=requested_for" \
-                | jq -r '.result[0].requested_for.value // empty')
-              [ -z "$REQ_FOR_SYSID" ] && output_arr+=( "[\"$num\",\"error-No requested_for\"]" ) && continue
-              EMAIL=$(curl -s -u "$SN_USER:$SN_PASS" \
-                -H "Accept: application/json" \
-                "https://utsdevesm.service-now.com/api/now/table/sys_user?sysparm_query=sys_id=${REQ_FOR_SYSID}&sysparm_fields=email" \
-                | jq -r '.result[0].email // empty')
-              [ -z "$EMAIL" ] && output_arr+=( "[\"$num\",\"error-Email not found\"]" ) && continue
-              output_arr+=( "[\"$num\",\"$EMAIL\"]" )
-            done
-            if (( ${#output_arr[@]} )); then
-              printf -v finalarr '[%s]' "$(IFS=,; echo "${output_arr[*]}")"
-            else
-              finalarr='[]'
+            URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number,request_item"
+            TASKS_RESP=$(curl -s -u "$SN_USER:$SN_PASS" -H "Accept: application/json" "$URL")
+            TASK_JSON=$(echo "$TASKS_RESP" | jq '.result')
+            TASK_COUNT=$(echo "$TASK_JSON" | jq 'length')
+            tasks_array="[]"
+            emails_array="[]"
+            if [[ "$TASK_COUNT" -gt 0 ]]; then
+              tasks_array=$(echo "$TASK_JSON" | jq -r '[.[].number]')
+              declare -a email_list=()
+              for idx in $(seq 0 $((TASK_COUNT-1))); do
+                ritm_sysid=$(echo "$TASK_JSON" | jq -r ".[$idx].request_item.value // empty")
+                if [[ -z "$ritm_sysid" || "$ritm_sysid" == "null" ]]; then
+                  email_list+=("\"error-No request_item\"")
+                  continue
+                fi
+                # Get requested_for sys_id
+                REQ_FOR_SYSID=$(curl -s -u "$SN_USER:$SN_PASS" \
+                  -H "Accept: application/json" \
+                  "https://utsdevesm.service-now.com/api/now/table/sc_req_item?sysparm_query=sys_id=${ritm_sysid}&sysparm_fields=requested_for" \
+                  | jq -r '.result[0].requested_for.value // empty')
+                if [[ -z "$REQ_FOR_SYSID" || "$REQ_FOR_SYSID" == "null" ]]; then
+                  email_list+=("\"error-No requested_for\"")
+                  continue
+                fi
+                # Get email
+                EMAIL=$(curl -s -u "$SN_USER:$SN_PASS" \
+                  -H "Accept: application/json" \
+                  "https://utsdevesm.service-now.com/api/now/table/sys_user?sysparm_query=sys_id=${REQ_FOR_SYSID}&sysparm_fields=email" \
+                  | jq -r '.result[0].email // empty')
+                if [[ -z "$EMAIL" || "$EMAIL" == "null" ]]; then
+                  email_list+=("\"error-Email not found\"")
+                else
+                  email_list+=("\"$EMAIL\"")
+                fi
+              done
+              emails_array="[$(IFS=,; echo "${email_list[*]}")]"
             fi
-            echo "Email pairs for $arr_name: $finalarr"
-            echo "${arr_name}_EMAILS=$finalarr" >> $GITHUB_ENV
-          }
-          fetch_emails "CASS_ADD" "$CASS_ADD"
-          fetch_emails "CASS_REMOVE" "$CASS_REMOVE"
-          fetch_emails "ACAD_ADD" "$ACAD_ADD"
-          fetch_emails "ACAD_REMOVE" "$ACAD_REMOVE"
-          fetch_emails "NACAD_ADD" "$NACAD_ADD"
-          fetch_emails "NACAD_REMOVE" "$NACAD_REMOVE"
-
-      # Step 3: Build the main 6x3 array [[tasks],[emails],[responses]]
-      - name: Build main array structure for mailman work
-        id: build-main-array
-        run: |
-          groups=("CASS_ADD" "CASS_REMOVE" "ACAD_ADD" "ACAD_REMOVE" "NACAD_ADD" "NACAD_REMOVE")
-          main_array="["
-          for i in "${!groups[@]}"; do
-            val="${groups[$i]}_EMAILS"
-            arr_json="${!val}"
-            tasks=$(echo "$arr_json" | jq '[.[].0]')
-            emails=$(echo "$arr_json" | jq '[.[].1]')
-            responses="[]"
-            group_part="[$tasks,$emails,$responses]"
+            group_part="[${tasks_array},${emails_array},[]]"
             main_array+="$group_part"
-            if [ "$i" -lt 5 ]; then main_array+=","; fi
+            if [ $i -lt 5 ]; then main_array+=","; fi
           done
           main_array+="]"
           echo "$main_array" > mailman_main_array.json
+          echo "Final main_array structure:"
           cat mailman_main_array.json
 
-      # Step 4: Run mailman scripts, update main array with responses
       - name: Add/remove members for all lists and fill in responses
         env:
           CASS_ADD_PW: ${{ secrets.CASS_PASSWORD }}
@@ -120,7 +93,6 @@ jobs:
           NACAD_ADD_PW: ${{ secrets.NACAD_PASSWORD }}
           NACAD_REMOVE_PW: ${{ secrets.NACAD_PASSWORD }}
         run: |
-          #!/bin/bash
           set -e
           urls=(
             "https://<CASS_MAILMAN_URL>/add"
@@ -138,7 +110,6 @@ jobs:
             "$NACAD_ADD_PW"
             "$NACAD_REMOVE_PW"
           )
-          # Prep output array
           updated_main_array="["
           for idx in {0..5}; do
             arr=$(jq ".[$idx]" mailman_main_array.json)
@@ -147,7 +118,6 @@ jobs:
             responses=()
             for j in "${!emails[@]}"; do
               email="${emails[$j]}"
-              # skip empty/error emails
               if [[ "$email" == error* ]]; then
                 resp="error-email-lookup"
               else
@@ -157,12 +127,10 @@ jobs:
                   resp=$(python3 scripts/remove_member_from_listserv.py "$email" "${urls[$idx]}" "${pws[$idx]}")
                 fi
               fi
-              # support if response is multiline
               resp=$(echo "$resp" | sed ':a;N;$!ba;s/\n/\\n/g')
               responses+=("\"$resp\"")
             done
             joined_responses=$(printf "%s," "${responses[@]}")
-            # Remove trailing comma
             joined_responses="[${joined_responses%,}]"
             tasks_json=$(echo "$arr" | jq '.[0]')
             emails_json=$(echo "$arr" | jq '.[1]')
@@ -177,7 +145,6 @@ jobs:
           echo "$updated_main_array" > mailman_main_array_with_results.json
           cat mailman_main_array_with_results.json
 
-      # Step 5: Update ServiceNow sc_task with the FINAL results and close/annotate task where required
       - name: Update ServiceNow tasks with results
         env:
           SN_USER: ${{ secrets.SERVICECONNECT_USERNAME }}
@@ -201,7 +168,6 @@ jobs:
               echo "Left $TASK open due to error: $RESULT"
             fi
           }
-          # Process all 6 groups
           for g in {0..5}; do
             arr=$(jq ".[$g]" mailman_main_array_with_results.json)
             tasks=($(echo "$arr" | jq -r '.[0][]'))
