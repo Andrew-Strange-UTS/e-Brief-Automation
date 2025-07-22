@@ -92,6 +92,12 @@ jobs:
           ACAD_REMOVE_PW: ${{ secrets.ACAD_PASSWORD }}
           NACAD_ADD_PW: ${{ secrets.NACAD_PASSWORD }}
           NACAD_REMOVE_PW: ${{ secrets.NACAD_PASSWORD }}
+          CASS_ADD_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
+          CASS_REMOVE_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
+          ACAD_ADD_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
+          ACAD_REMOVE_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
+          NACAD_ADD_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
+          NACAD_REMOVE_URL: ${{ https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/ }}
         run: |
           set -e
           urls=(
