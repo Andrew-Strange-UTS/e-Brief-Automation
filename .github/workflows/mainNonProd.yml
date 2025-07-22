@@ -86,12 +86,12 @@ jobs:
       
       - name: Add/remove members for all lists and fill in responses
         env:
-          CASS_ADD_PW: ${{ secrets.CASS_PASSWORD }}
-          CASS_REMOVE_PW: ${{ secrets.CASS_PASSWORD }}
-          ACAD_ADD_PW: ${{ secrets.ACAD_PASSWORD }}
-          ACAD_REMOVE_PW: ${{ secrets.ACAD_PASSWORD }}
-          NACAD_ADD_PW: ${{ secrets.NACAD_PASSWORD }}
-          NACAD_REMOVE_PW: ${{ secrets.NACAD_PASSWORD }}
+          CASS_ADD_PW: ${{ secrets.TESTPASSWORD }}
+          CASS_REMOVE_PW: ${{ secrets.TESTPASSWORD }}
+          ACAD_ADD_PW: ${{ secrets.TESTPASSWORD }}
+          ACAD_REMOVE_PW: ${{ secrets.TESTPASSWORD }}
+          NACAD_ADD_PW: ${{ secrets.TESTPASSWORD }}
+          NACAD_REMOVE_PW: ${{ secrets.TESTPASSWORD }}
       
           CASS_ADD_URL: https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/add
           CASS_REMOVE_URL: https://b7943cf2de68.ngrok-free.app/mailman/admin/testlist/members/remove
