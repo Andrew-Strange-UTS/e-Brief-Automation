@@ -1,4 +1,4 @@
-name: Mailman Listserv Workflow
+name: Mailman Listserv Workflow (Production)
 
 on:
   workflow_dispatch:
@@ -8,88 +8,45 @@ env:
 
 jobs:
   collect-tasks:
-    name: Collect Add/Remove Tasks for All Lists
+    name: Build Task Matrix from List YAML
     runs-on: ubuntu-latest
     outputs:
       task_matrix: ${{ steps.build_matrix.outputs.matrix }}
     steps:
+      - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: 3.11
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
-      - name: Fetch and Build Task Matrix
+      - name: Build matrix from YAML env
         id: build_matrix
         env:
           SN_USERNAME: ${{ secrets.SERVICECONNECTUSERNAME }}
           SN_PASSWORD: ${{ secrets.SERVICECONNECTPASSWORD }}
+          SN_URL: ${{ env.SN_URL }}
+          LISTS_YAML: |
+            - name: CASS
+              add_desc: "Add user to CASS ebrief."
+              remove_desc: "Remove user to CASS ebrief."
+              add_url: "http://listserv.uts.edu.au/mailman/admin/cass-ebrief/members/add"
+              remove_url: "http://listserv.uts.edu.au/mailman/admin/cass-ebrief/members/remove"
+              password_secret: "CASS_E_BRIEF_PASSWORD"
+            - name: Academic
+              add_desc: "Add user to Academic ebrief"
+              remove_desc: "Remove user Academic ebrief"
+              add_url: "http://listserv.uts.edu.au/mailman/admin/mytimetable-academic/members/add"
+              remove_url: "http://listserv.uts.edu.au/mailman/admin/mytimetable-academic/members/remove"
+              password_secret: "MYTIMETABLE_E_BRIEF_PASSWORD"
+            - name: non-Academic
+              add_desc: "Add user to non-Academic ebrief"
+              remove_desc: "Remove user from non-Academic ebrief"
+              add_url: "http://listserv.uts.edu.au/mailman/admin/mytimetable-non-academic/members/add"
+              remove_url: "http://listserv.uts.edu.au/mailman/admin/mytimetable-non-academic/members/remove"
+              password_secret: "MYTIMETABLE_E_BRIEF_PASSWORD"
         run: |
-          cat <<EOF > build_matrix.py
-import os
-import urllib.parse
-import requests
-import json
-
-sn_url = os.environ["SN_URL"]
-username = os.environ["SN_USERNAME"]
-password = os.environ["SN_PASSWORD"]
-
-lists = [
-    {
-        "name": "CASS",
-        "add_desc": "Add user to CASS ebrief.",
-        "remove_desc": "Remove user to CASS ebrief.",
-        "add_url": "http://listserv.uts.edu.au/mailman/admin/cass-ebrief/members/add",
-        "remove_url": "http://listserv.uts.edu.au/mailman/admin/cass-ebrief/members/remove",
-        "password_secret": "CASS_E_BRIEF_PASSWORD"
-    },
-    {
-        "name": "Academic",
-        "add_desc": "Add user to Academic ebrief",
-        "remove_desc": "Remove user Academic ebrief",
-        "add_url": "http://listserv.uts.edu.au/mailman/admin/mytimetable-academic/members/add",
-        "remove_url": "http://listserv.uts.edu.au/mailman/admin/mytimetable-academic/members/remove",
-        "password_secret": "MYTIMETABLE_E_BRIEF_PASSWORD"
-    },
-    {
-        "name": "non-Academic",
-        "add_desc": "Add user to non-Academic ebrief",
-        "remove_desc": "Remove user from non-Academic ebrief",
-        "add_url": "http://listserv.uts.edu.au/mailman/admin/mytimetable-non-academic/members/add",
-        "remove_url": "http://listserv.uts.edu.au/mailman/admin/mytimetable-non-academic/members/remove",
-        "password_secret": "MYTIMETABLE_E_BRIEF_PASSWORD"
-    }
-]
-
-matrix = []
-
-def fetch_task_numbers(desc):
-    query = f"active=true^state=1^short_description={desc}"
-    encoded_query = urllib.parse.quote(query)
-    url = f"{sn_url}/api/now/table/sc_task?sysparm_query={encoded_query}&sysparm_fields=number"
-    r = requests.get(url, auth=(username, password), headers={"Accept": "application/json"})
-    r.raise_for_status()
-    return [x["number"] for x in r.json().get("result", [])]
-
-for l in lists:
-    for mode in ["add", "remove"]:
-        desc = l[f"{mode}_desc"]
-        url = l[f"{mode}_url"]
-        password_secret = l["password_secret"]
-        task_nums = fetch_task_numbers(desc)
-        for task_num in task_nums:
-            matrix.append({
-                "list": l["name"],
-                "mode": mode,
-                "url": url,
-                "password_secret": password_secret,
-                "task_num": task_num
-            })
-
-print(json.dumps(matrix))
-EOF
-          python3 build_matrix.py > matrix.json
+          python3 scripts/build_matrix.py > matrix.json
           echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
 
   get-emails:
@@ -102,6 +59,7 @@ EOF
     outputs:
       email: ${{ steps.get_email.outputs.email }}
     steps:
+      - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -126,7 +84,7 @@ EOF
 
   mailman-action:
     name: Add or Remove User from Listserv
-    needs: get-emails
+    needs: [collect-tasks, get-emails]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -141,7 +99,7 @@ EOF
           python-version: 3.11
       - name: Install Selenium and Chrome
         run: |
-          pip install selenium
+          pip install selenium pyyaml
           sudo apt-get update
           sudo apt-get install -y chromium-driver chromium-browser
       - name: Add or Remove User from Listserv
@@ -159,7 +117,7 @@ EOF
 
   update-task:
     name: Update and Close ServiceNow Task
-    needs: [get-emails, mailman-action]
+    needs: [collect-tasks, get-emails, mailman-action]
     runs-on: ubuntu-latest
     strategy:
       matrix:
