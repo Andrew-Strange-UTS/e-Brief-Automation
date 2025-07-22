@@ -1,4 +1,4 @@
-name: Print All 6 Task Lists
+name: Fetch All Mailman Listserv Tasks
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ jobs:
     name: Fetch Add user to CASS ebrief. Tasks
     runs-on: ubuntu-latest
     outputs:
-      task_numbers: ${{ steps.extract.outputs.add_cass_task_list }}
+      task_numbers: ${{ steps.extract.outputs.task_list }}
     steps:
       - name: Query tasks with short_description "Add user to CASS ebrief."
         id: extract
@@ -21,14 +21,14 @@ jobs:
           URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number,short_description"
           RESPONSE=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" "$URL")
           echo "$RESPONSE" | jq -r '.result[] | "\(.number) - \(.short_description)"'
-          ADD_CASS_TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
-          echo "add_cass_task_list=$ADD_CASS_TASK_LIST" >> $GITHUB_OUTPUT
+          TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
+          echo "task_list=$TASK_LIST" >> $GITHUB_OUTPUT
 
   fetch-task-remove-user-cass:
     name: Fetch Remove user to CASS ebrief. Tasks
     runs-on: ubuntu-latest
     outputs:
-      task_numbers: ${{ steps.extract.outputs.remove_cass_task_list }}
+      task_numbers: ${{ steps.extract.outputs.task_list }}
     steps:
       - name: Query tasks with short_description "Remove user to CASS ebrief."
         id: extract
@@ -41,14 +41,14 @@ jobs:
           URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number,short_description"
           RESPONSE=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" "$URL")
           echo "$RESPONSE" | jq -r '.result[] | "\(.number) - \(.short_description)"'
-          REMOVE_CASS_TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
-          echo "remove_cass_task_list=$REMOVE_CASS_TASK_LIST" >> $GITHUB_OUTPUT
+          TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
+          echo "task_list=$TASK_LIST" >> $GITHUB_OUTPUT
 
   fetch-task-add-user-academic:
     name: Fetch Add user to Academic ebrief Tasks
     runs-on: ubuntu-latest
     outputs:
-      task_numbers: ${{ steps.extract.outputs.add_academic_task_list }}
+      task_numbers: ${{ steps.extract.outputs.task_list }}
     steps:
       - name: Query tasks with short_description "Add user to Academic ebrief"
         id: extract
@@ -61,14 +61,14 @@ jobs:
           URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number,short_description"
           RESPONSE=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" "$URL")
           echo "$RESPONSE" | jq -r '.result[] | "\(.number) - \(.short_description)"'
-          ADD_ACADEMIC_TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
-          echo "add_academic_task_list=$ADD_ACADEMIC_TASK_LIST" >> $GITHUB_OUTPUT
+          TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
+          echo "task_list=$TASK_LIST" >> $GITHUB_OUTPUT
 
   fetch-task-remove-user-academic:
     name: Fetch Remove user Academic ebrief Tasks
     runs-on: ubuntu-latest
     outputs:
-      task_numbers: ${{ steps.extract.outputs.remove_academic_task_list }}
+      task_numbers: ${{ steps.extract.outputs.task_list }}
     steps:
       - name: Query tasks with short_description "Remove user Academic ebrief"
         id: extract
@@ -81,14 +81,14 @@ jobs:
           URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number,short_description"
           RESPONSE=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" "$URL")
           echo "$RESPONSE" | jq -r '.result[] | "\(.number) - \(.short_description)"'
-          REMOVE_ACADEMIC_TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
-          echo "remove_academic_task_list=$REMOVE_ACADEMIC_TASK_LIST" >> $GITHUB_OUTPUT
+          TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
+          echo "task_list=$TASK_LIST" >> $GITHUB_OUTPUT
 
   fetch-task-add-user-non-academic:
     name: Fetch Add user to non-Academic ebrief Tasks
     runs-on: ubuntu-latest
     outputs:
-      task_numbers: ${{ steps.extract.outputs.add_non_academic_task_list }}
+      task_numbers: ${{ steps.extract.outputs.task_list }}
     steps:
       - name: Query tasks with short_description "Add user to non-Academic ebrief"
         id: extract
@@ -101,14 +101,14 @@ jobs:
           URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number,short_description"
           RESPONSE=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" "$URL")
           echo "$RESPONSE" | jq -r '.result[] | "\(.number) - \(.short_description)"'
-          ADD_NON_ACADEMIC_TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
-          echo "add_non_academic_task_list=$ADD_NON_ACADEMIC_TASK_LIST" >> $GITHUB_OUTPUT
+          TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
+          echo "task_list=$TASK_LIST" >> $GITHUB_OUTPUT
 
   fetch-task-remove-user-non-academic:
     name: Fetch Remove user from non-Academic ebrief Tasks
     runs-on: ubuntu-latest
     outputs:
-      task_numbers: ${{ steps.extract.outputs.remove_non_academic_task_list }}
+      task_numbers: ${{ steps.extract.outputs.task_list }}
     steps:
       - name: Query tasks with short_description "Remove user from non-Academic ebrief"
         id: extract
@@ -121,5 +121,5 @@ jobs:
           URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number,short_description"
           RESPONSE=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" "$URL")
           echo "$RESPONSE" | jq -r '.result[] | "\(.number) - \(.short_description)"'
-          REMOVE_NON_ACADEMIC_TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
-          echo "remove_non_academic_task_list=$REMOVE_NON_ACADEMIC_TASK_LIST" >> $GITHUB_OUTPUT
+          TASK_LIST=$(echo "$RESPONSE" | jq -r '[.result[].number] | @json')
+          echo "task_list=$TASK_LIST" >> $GITHUB_OUTPUT
