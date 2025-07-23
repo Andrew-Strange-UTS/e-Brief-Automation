@@ -48,6 +48,10 @@ try:
     else:
         print("error-Could not find clear result")
 except Exception as ex:
-    print("error-" + str(ex))
+    maxlen = 100
+    msg = str(ex).replace('\n', '\\n')
+    if len(msg) > maxlen:
+        msg = msg[:maxlen] + '...'
+    print("error-" + msg)
 finally:
     driver.quit()
