@@ -63,11 +63,11 @@ try:
     if result:
         print(result)
     else:
-    # fallback to just "already a member" if all li texts mention "already a member"
-    if any("already a member" in li.text.lower() for li in lis):
-        print(f"{email} -- Already a member")
-    else:
-        print(f"error-Response parse failed: " + " | ".join(li.text for li in lis))
+        # fallback to just "already a member" if all li texts mention "already a member"
+        if any("already a member" in li.text.lower() for li in lis):
+            print(f"{email} -- Already a member")
+        else:
+            print(f"error-Response parse failed: " + " | ".join(li.text for li in lis))
 except Exception as ex:
     maxlen = 100
     msg = str(ex).replace('\n', '\\n')
