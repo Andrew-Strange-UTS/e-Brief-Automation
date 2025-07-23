@@ -8,12 +8,17 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
 if len(sys.argv) != 4:
-    print("Usage: remove_member_from_listserv.py EMAIL URL PASSWORD", file=sys.stderr)
+    print("error-usage: remove_member_from_listserv.py EMAIL URL PASSWORD", file=sys.stderr)
     sys.exit(1)
 
 email = sys.argv[1]
 url = sys.argv[2]
 password = sys.argv[3]
+
+# EARLY OUT: Skip if email is empty, null, or looks like an error
+if not email or email.strip().lower() in ("null", "none", "") or email.startswith("error"):
+    print("error-skipped-empty-or-error-email")
+    sys.exit(0)
 
 chrome_options = Options()
 chrome_options.add_argument("--headless")
@@ -22,7 +27,6 @@ chrome_options.add_argument("--disable-dev-shm-usage")
 service = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=service, options=chrome_options)
 wait = WebDriverWait(driver, 20)
-
 try:
     driver.get(url)
     wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Visit Site')]"))).click()
