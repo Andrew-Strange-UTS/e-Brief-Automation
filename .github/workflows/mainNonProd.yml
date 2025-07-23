@@ -10,11 +10,21 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install requirements (jq, Python, Selenium, Chrome)
+      - name: Install jq and chromium
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip jq chromium-browser
-          python3 -m pip install --upgrade pip
+          sudo apt-get install -y jq chromium-browser
+      
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/scripts/*.py') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install Python requirements
+        run: |
           pip3 install selenium webdriver-manager
 
       - name: Fetch ServiceNow tasks, build main array structure
