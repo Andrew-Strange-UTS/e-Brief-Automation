@@ -17,6 +17,7 @@ password = sys.argv[3]
 if not email or email.strip().lower() in ("null", "none", "") or email.startswith("error"):
     print("error-skipped-empty-or-error-email")
     sys.exit(0)
+
 chrome_options = Options()
 chrome_options.add_argument("--headless")
 chrome_options.add_argument("--no-sandbox")
@@ -26,15 +27,13 @@ driver = webdriver.Chrome(service=service, options=chrome_options)
 wait = WebDriverWait(driver, 20)
 try:
     driver.get(url)
-    # New: check if body id="ngrok", and only then click Visit Site
+    # ngrok check
     try:
         body = driver.find_element(By.TAG_NAME, "body")
         if body.get_attribute("id") == "ngrok":
             wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Visit Site')]"))).click()
     except Exception:
-        # body element or id may not exist – that's fine, just proceed
         pass
-
     pw_input = wait.until(EC.presence_of_element_located((By.XPATH, "//input[@type='password' and @name='adminpw']")))
     pw_input.send_keys(password)
     pw_input.submit()
@@ -44,13 +43,17 @@ try:
     textarea.clear()
     textarea.send_keys(email)
     driver.find_element(By.XPATH, "//input[@name='setmemberopts_btn' and @type='SUBMIT']").click()
-    wait.until(EC.presence_of_element_located((By.TAG_NAME, "li")))
-    lis = driver.find_elements(By.TAG_NAME, "li")
-    entry = next((li.text for li in lis if email in li.text), None)
-    if entry:
-        print(entry.strip())
+    # --- RESULT SECTION ---
+    # Wait for either <h3> or <h5>
+    wait.until(lambda d: d.find_elements(By.TAG_NAME, "h3") or d.find_elements(By.TAG_NAME, "h5"))
+    # Try to find <h3> first, then <h5>
+    heading = None
+    if driver.find_elements(By.TAG_NAME, "h3"):
+        heading = driver.find_element(By.TAG_NAME, "h3")
     else:
-        print("error-Response parse failed: " + " | ".join(li.text for li in lis))
+        heading = driver.find_element(By.TAG_NAME, "h5")
+    li = driver.find_element(By.TAG_NAME, "li")
+    print(f"{heading.text.strip()} {li.text.strip()}")
 except Exception as ex:
     maxlen = 100
     msg = str(ex).replace('\n', '\\n')
