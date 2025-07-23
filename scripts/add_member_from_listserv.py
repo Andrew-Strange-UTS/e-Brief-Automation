@@ -10,14 +10,12 @@ from webdriver_manager.chrome import ChromeDriverManager
 if len(sys.argv) != 4:
     print("error-usage: add_member_from_listserv.py EMAIL URL PASSWORD", file=sys.stderr)
     sys.exit(1)
-
 email = sys.argv[1]
 url = sys.argv[2]
 password = sys.argv[3]
 if not email or email.strip().lower() in ("null", "none", "") or email.startswith("error"):
     print("error-skipped-empty-or-error-email")
     sys.exit(0)
-
 chrome_options = Options()
 chrome_options.add_argument("--headless")
 chrome_options.add_argument("--no-sandbox")
@@ -25,18 +23,25 @@ chrome_options.add_argument("--disable-dev-shm-usage")
 service = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=service, options=chrome_options)
 wait = WebDriverWait(driver, 20)
-
 try:
     driver.get(url)
-
-    # Login if required
     try:
-        pw_input = wait.until(EC.presence_of_element_located((By.XPATH, "//input[@type='password' and @name='adminpw']")))
-        pw_input.send_keys(password)
-        pw_input.submit()
+        body = driver.find_element(By.TAG_NAME, "body")
+        if body.get_attribute("id") == "ngrok":
+            wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Visit Site')]"))).click()
     except Exception:
-        pass  # If there is no login, proceed
+        pass
+    pw_input = wait.until(EC.presence_of_element_located((By.XPATH, "//input[@type='password' and @name='adminpw']")))
+    pw_input.send_keys(password)
+    pw_input.submit()
+    radio = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@name='send_welcome_msg_to_this_batch' and @type='RADIO' and @value='1']")))
+    radio.click()
+    textarea = wait.until(EC.presence_of_element_located((By.XPATH, "//textarea[@name='subscribees']")))
+    textarea.clear()
+    textarea.send_keys(email)
+    driver.find_element(By.XPATH, "//input[@name='setmemberopts_btn' and @type='SUBMIT']").click()
 
+    # --- CHANGED LOGIC BELOW: just print first li
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "li")))
     li = driver.find_element(By.TAG_NAME, "li")
     print(li.text.strip())
