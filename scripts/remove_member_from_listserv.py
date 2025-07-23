@@ -46,28 +46,11 @@ try:
     driver.find_element(By.XPATH, "//input[@name='setmemberopts_btn' and @type='SUBMIT']").click()
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "li")))
     lis = driver.find_elements(By.TAG_NAME, "li")
-    
-    result = None
-    for li in lis:
-        li_text = li.text.strip()
-        # Prefer explicit known message
-        if email in li_text and "already a member" in li_text.lower():
-            result = f"{email} -- Already a member"
-            break
-        if email in li_text and "successfully subscribed" in li_text.lower():
-            result = f"{email} -- Subscribed"
-            break
-        if email in li_text:
-            result = li_text  # fallback, includes the email, good enough
-    
-    if result:
-        print(result)
+    entry = next((li.text for li in lis if email in li.text), None)
+    if entry:
+        print(entry.strip())
     else:
-    # fallback to just "already a member" if all li texts mention "already a member"
-    if any("already a member" in li.text.lower() for li in lis):
-        print(f"{email} -- Already a member")
-    else:
-        print(f"error-Response parse failed: " + " | ".join(li.text for li in lis))
+        print("error-Response parse failed: " + " | ".join(li.text for li in lis))
 except Exception as ex:
     maxlen = 100
     msg = str(ex).replace('\n', '\\n')
