@@ -16,6 +16,7 @@ password = sys.argv[3]
 if not email or email.strip().lower() in ("null", "none", "") or email.startswith("error"):
     print("error-skipped-empty-or-error-email")
     sys.exit(0)
+
 chrome_options = Options()
 chrome_options.add_argument("--headless")
 chrome_options.add_argument("--no-sandbox")
@@ -23,6 +24,7 @@ chrome_options.add_argument("--disable-dev-shm-usage")
 service = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=service, options=chrome_options)
 wait = WebDriverWait(driver, 20)
+
 try:
     driver.get(url)
     try:
@@ -44,39 +46,36 @@ try:
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "li")))
     lis = driver.find_elements(By.TAG_NAME, "li")
 
-    # Robust parsing: search all <li>-s
     result_line = ""
     for li in lis:
         txt = li.text.strip().lower()
         if email.lower() in txt:
             if "already" in txt and "member" in txt:
-                result_line = f"{email} -- already a member"
+                result_line = f"🤖 Mailman result: {email} -- already a member"
                 break
             elif "successfully subscribed" in txt or "subscribed" in txt:
-                # covers both "successfully subscribed" and "user@ ex ... subscribed"
-                result_line = f"{email} -- successfully subscribed"
+                result_line = f"🤖 Mailman result: {email} -- subscribed"
                 break
             elif "error" in txt or "failed" in txt:
-                result_line = f"{email} -- error: {li.text.strip()}"
+                result_line = f"🤖 Mailman result: {email} -- error: {li.text.strip()}"
                 break
     if not result_line:
         # Try to find any li indicating 'already a member', even if email is not echoed
         for li in lis:
             txt = li.text.strip().lower()
             if "already" in txt and "member" in txt:
-                result_line = f"{email} -- already a member"
+                result_line = f"🤖 Mailman result: {email} -- already a member"
                 break
             elif "successfully subscribed" in txt or "subscribed" in txt:
-                result_line = f"{email} -- successfully subscribed"
+                result_line = f"🤖 Mailman result: {email} -- subscribed"
                 break
     if not result_line and lis:
         # fallback: just join the first li, but mark as unknown result
-        result_line = f"{email} -- unknown result: {lis[0].text.strip()}"
+        result_line = f"🤖 Mailman result: {email} -- unknown result: {lis[0].text.strip()}"
     if result_line:
         print(result_line)
     else:
         print(f"error-No result li found for {email}")
-
 except Exception as ex:
     maxlen = 100
     msg = str(ex).replace('\n', '\\n')
