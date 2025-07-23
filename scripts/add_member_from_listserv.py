@@ -41,10 +41,11 @@ try:
     textarea.send_keys(email)
     driver.find_element(By.XPATH, "//input[@name='setmemberopts_btn' and @type='SUBMIT']").click()
 
-    # --- CHANGED LOGIC BELOW: just print first li
-    wait.until(EC.presence_of_element_located((By.TAG_NAME, "li")))
+    # --- SIMPLIFIED RESULT SECTION ---
+    wait.until(EC.presence_of_element_located((By.TAG_NAME, "h5")))
+    h5 = driver.find_element(By.TAG_NAME, "h5")
     li = driver.find_element(By.TAG_NAME, "li")
-    print(li.text.strip())
+    print(f"{h5.text.strip()} {li.text.strip()}")
 
 except Exception as ex:
     maxlen = 100
