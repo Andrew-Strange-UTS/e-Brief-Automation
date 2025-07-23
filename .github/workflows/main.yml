@@ -1,166 +1,217 @@
-name: Mailman Listserv Workflow (Production)
+name: Mailman Listserv automation (Production)
 
 on:
   workflow_dispatch:
 
-env:
-  SN_URL: https://utsdevesm.service-now.com
-
 jobs:
-  collect-tasks:
-    name: Build Task Matrix from List YAML
+  mailman-automation:
     runs-on: ubuntu-latest
-    outputs:
-      task_matrix: ${{ steps.build_matrix.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.11
-      - name: Install Python dependencies
-        run: |
-          pip install requests pyyaml
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-      - name: Build matrix from YAML env
-        id: build_matrix
-        env:
-          SN_USERNAME: ${{ secrets.SERVICECONNECTUSERNAME }}
-          SN_PASSWORD: ${{ secrets.SERVICECONNECTPASSWORD }}
-          SN_URL: ${{ env.SN_URL }}
-          LISTS_YAML: |
-            - name: CASS
-              add_desc: "Add user to CASS ebrief."
-              remove_desc: "Remove user to CASS ebrief."
-              add_url: "http://listserv.uts.edu.au/mailman/admin/cass-ebrief/members/add"
-              remove_url: "http://listserv.uts.edu.au/mailman/admin/cass-ebrief/members/remove"
-              password_secret: "CASS_E_BRIEF_PASSWORD"
-            - name: Academic
-              add_desc: "Add user to Academic ebrief"
-              remove_desc: "Remove user Academic ebrief"
-              add_url: "http://listserv.uts.edu.au/mailman/admin/mytimetable-academic/members/add"
-              remove_url: "http://listserv.uts.edu.au/mailman/admin/mytimetable-academic/members/remove"
-              password_secret: "MYTIMETABLE_E_BRIEF_PASSWORD"
-            - name: non-Academic
-              add_desc: "Add user to non-Academic ebrief"
-              remove_desc: "Remove user from non-Academic ebrief"
-              add_url: "http://listserv.uts.edu.au/mailman/admin/mytimetable-non-academic/members/add"
-              remove_url: "http://listserv.uts.edu.au/mailman/admin/mytimetable-non-academic/members/remove"
-              password_secret: "MYTIMETABLE_E_BRIEF_PASSWORD"
-        run: |
-          python3 scripts/build_matrix.py > matrix.json
-          echo "matrix=$(cat matrix.json)" >> $GITHUB_OUTPUT
 
-  get-emails:
-    name: Get Requested For Emails for Each Task
-    needs: collect-tasks
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include: ${{ fromJson(needs.collect-tasks.outputs.task_matrix) }}
-    outputs:
-      email: ${{ steps.get_email.outputs.email }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.11
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-      - name: Get Requested For Email
-        id: get_email
-        env:
-          SN_USERNAME: ${{ secrets.SERVICECONNECTUSERNAME }}
-          SN_PASSWORD: ${{ secrets.SERVICECONNECTPASSWORD }}
-          SN_URL: ${{ env.SN_URL }}
-        run: |
-          TASK_NUM="${{ matrix.task_num }}"
-          RITM_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
-            "$SN_URL/api/now/table/sc_task?sysparm_query=number=${TASK_NUM}&sysparm_fields=request_item" | jq -r '.result[0].request_item.value')
-          REQUESTED_FOR_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
-            "$SN_URL/api/now/table/sc_req_item?sysparm_query=sys_id=${RITM_SYSID}&sysparm_fields=requested_for" | jq -r '.result[0].requested_for.value')
-          EMAIL=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" -H "Accept: application/json" \
-            "$SN_URL/api/now/table/sys_user?sysparm_query=sys_id=${REQUESTED_FOR_SYSID}&sysparm_fields=email" | jq -r '.result[0].email // ""')
-          echo "email=$EMAIL" >> $GITHUB_OUTPUT
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-  mailman-action:
-    name: Add or Remove User from Listserv
-    needs: [collect-tasks, get-emails]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include: ${{ fromJson(needs.collect-tasks.outputs.task_matrix) }}
-    outputs:
-      result: ${{ steps.mailman.outputs.result }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.11
-      - name: Install Selenium and Chrome
+      - name: Install jq and chromium
         run: |
-          pip install selenium pyyaml
           sudo apt-get update
-          sudo apt-get install -y chromium-driver chromium-browser
-      - name: Add or Remove User from Listserv
-        id: mailman
-        env:
-          LISTSERV_PASSWORD: ${{ secrets[matrix.password_secret] }}
+          sudo apt-get install -y jq chromium-browser
+      
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/scripts/*.py') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install Python requirements
         run: |
-          python3 scripts/listserv_mailman.py \
-            --action "${{ matrix.mode }}" \
-            --url "${{ matrix.url }}" \
-            --password "$LISTSERV_PASSWORD" \
-            --email "${{ needs.get-emails.outputs.email }}" \
-            > result.txt
-          echo "result=$(cat result.txt)" >> $GITHUB_OUTPUT
+          pip3 install selenium webdriver-manager
 
-  update-task:
-    name: Update and Close ServiceNow Task
-    needs: [collect-tasks, get-emails, mailman-action]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include: ${{ fromJson(needs.collect-tasks.outputs.task_matrix) }}
-    steps:
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-      - name: Update ServiceNow Task
+      - name: Fetch ServiceNow tasks, build main array structure
+        id: fetch-and-build-main-array
         env:
-          SN_USERNAME: ${{ secrets.SERVICECONNECTUSERNAME }}
-          SN_PASSWORD: ${{ secrets.SERVICECONNECTPASSWORD }}
-          SN_URL: ${{ env.SN_URL }}
+          SN_USER: ${{ secrets.SERVICECONNECT_USERNAME }}
+          SN_PASS: ${{ secrets.SERVICECONNECT_PASSWORD }}
         run: |
-          TASK_NUM="${{ matrix.task_num }}"
-          EMAIL="${{ needs.get-emails.outputs.email }}"
-          MODE="${{ matrix.mode }}"
-          RESPONSE=$(cat result.txt 2>/dev/null || echo "")
-          if [[ "$MODE" == "add" ]]; then
-            WORK_NOTES="$RESPONSE"
-          else
-            WORK_NOTES="$EMAIL - removed for ebrief"
-          fi
-          TASK_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" \
-            -H "Accept: application/json" \
-            "$SN_URL/api/now/table/sc_task?sysparm_query=number=${TASK_NUM}&sysparm_fields=sys_id" | jq -r '.result[0].sys_id')
-          CI_SYSID=$(curl -s -u "$SN_USERNAME:$SN_PASSWORD" \
-            -H "Accept: application/json" \
-            "$SN_URL/api/now/table/cmdb_ci?sysparm_query=name=Listserv&sysparm_fields=sys_id" | jq -r '.result[0].sys_id')
-          if [[ -n "$TASK_SYSID" && "$TASK_SYSID" != "null" && -n "$CI_SYSID" && "$CI_SYSID" != "null" ]]; then
-            curl -s -u "$SN_USERNAME:$SN_PASSWORD" \
-              -X PATCH \
-              -H "Content-Type: application/json" \
-              -d '{
-                    "state": "3",
-                    "cmdb_ci": "'"${CI_SYSID}"'",
-                    "work_notes": "'"${WORK_NOTES}"'"
-                  }' \
-              "$SN_URL/api/now/table/sc_task/${TASK_SYSID}"
-            echo "✅ Task updated and CI assigned"
-          else
-            echo "❌ Could not resolve sys_id for task (${TASK_SYSID}) or CI (${CI_SYSID})"
+          set -e
+          DESCS=(
+            "Add user to CASS ebrief."
+            "Remove user to CASS ebrief."
+            "Add user to Academic ebrief"
+            "Remove user Academic ebrief"
+            "Add user to non-Academic ebrief"
+            "Remove user from non-Academic ebrief"
+          )
+          main_array="["
+          for i in {0..5}; do
+            DESC="${DESCS[$i]}"
+            # 1. Fetch tasks with state=1, active, matching description
+            QUERY="active=true^state=1^short_description=$DESC"
+            ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${QUERY}'))")
+            URL="https://utsdevesm.service-now.com/api/now/table/sc_task?sysparm_query=${ENCODED_QUERY}&sysparm_fields=number,request_item"
+            TASKS_RESP=$(curl -s -u "$SN_USER:$SN_PASS" -H "Accept: application/json" "$URL")
+            TASK_JSON=$(echo "$TASKS_RESP" | jq '.result')
+            TASK_COUNT=$(echo "$TASK_JSON" | jq 'length')
+            tasks_array="[]"
+            emails_array="[]"
+            if [[ "$TASK_COUNT" -gt 0 ]]; then
+              tasks_array=$(echo "$TASK_JSON" | jq -r '[.[].number]')
+              declare -a email_list=()
+              for idx in $(seq 0 $((TASK_COUNT-1))); do
+                ritm_sysid=$(echo "$TASK_JSON" | jq -r ".[$idx].request_item.value // empty")
+                if [[ -z "$ritm_sysid" || "$ritm_sysid" == "null" ]]; then
+                  email_list+=("\"error-No request_item\"")
+                  continue
+                fi
+                # Get requested_for sys_id
+                REQ_FOR_SYSID=$(curl -s -u "$SN_USER:$SN_PASS" \
+                  -H "Accept: application/json" \
+                  "https://utsdevesm.service-now.com/api/now/table/sc_req_item?sysparm_query=sys_id=${ritm_sysid}&sysparm_fields=requested_for" \
+                  | jq -r '.result[0].requested_for.value // empty')
+                if [[ -z "$REQ_FOR_SYSID" || "$REQ_FOR_SYSID" == "null" ]]; then
+                  email_list+=("\"error-No requested_for\"")
+                  continue
+                fi
+                # Get email
+                EMAIL=$(curl -s -u "$SN_USER:$SN_PASS" \
+                  -H "Accept: application/json" \
+                  "https://utsdevesm.service-now.com/api/now/table/sys_user?sysparm_query=sys_id=${REQ_FOR_SYSID}&sysparm_fields=email" \
+                  | jq -r '.result[0].email // empty')
+                if [[ -z "$EMAIL" || "$EMAIL" == "null" ]]; then
+                  email_list+=("\"error-Email not found\"")
+                else
+                  email_list+=("\"$EMAIL\"")
+                fi
+              done
+              emails_array="[$(IFS=,; echo "${email_list[*]}")]"
+            fi
+            group_part="[${tasks_array},${emails_array},[]]"
+            main_array+="$group_part"
+            if [ $i -lt 5 ]; then main_array+=","; fi
+          done
+          main_array+="]"
+          echo "$main_array" > mailman_main_array.json
+          echo "Final main_array structure:"
+          cat mailman_main_array.json
+      
+      - name: Add/remove members for all lists and fill in responses
+        env:
+          CASS_ADD_PW: ${{ secrets.CASS_E_BRIEF_PASSWORD }}
+          CASS_REMOVE_PW: ${{ secrets.CASS_E_BRIEF_PASSWORD }}
+          ACAD_ADD_PW: ${{ secrets.MYTIMETABLE_E_BRIEF_PASSWORD }}
+          ACAD_REMOVE_PW: ${{ secrets.MYTIMETABLE_E_BRIEF_PASSWORD }}
+          NACAD_ADD_PW: ${{ secrets.MYTIMETABLE_E_BRIEF_PASSWORD }}
+          NACAD_REMOVE_PW: ${{ secrets.MYTIMETABLE_E_BRIEF_PASSWORD }}
+      
+          CASS_ADD_URL: http://listserv.uts.edu.au/mailman/admin/cass-ebrief/members/add
+          CASS_REMOVE_URL: http://listserv.uts.edu.au/mailman/admin/cass-ebrief/members/remove
+          ACAD_ADD_URL: http://listserv.uts.edu.au/mailman/admin/mytimetable-academic/members/add
+          ACAD_REMOVE_URL: http://listserv.uts.edu.au/mailman/admin/mytimetable-academic/members/remove
+          NACAD_ADD_URL: http://listserv.uts.edu.au/mailman/admin/mytimetable-non-academic/members/add
+          NACAD_REMOVE_URL: http://listserv.uts.edu.au/mailman/admin/mytimetable-non-academic/members/remove
+      
+        run: |
+          set -e
+          urls=(
+            "$CASS_ADD_URL"
+            "$CASS_REMOVE_URL"
+            "$ACAD_ADD_URL"
+            "$ACAD_REMOVE_URL"
+            "$NACAD_ADD_URL"
+            "$NACAD_REMOVE_URL"
+          )
+          pws=(
+            "$CASS_ADD_PW"
+            "$CASS_REMOVE_PW"
+            "$ACAD_ADD_PW"
+            "$ACAD_REMOVE_PW"
+            "$NACAD_ADD_PW"
+            "$NACAD_REMOVE_PW"
+          )
+          updated_main_array="["
+          for idx in {0..5}; do
+            arr=$(jq ".[$idx]" mailman_main_array.json)
+            tasks=($(echo "$arr" | jq -r '.[0][]'))
+            emails=($(echo "$arr" | jq -r '.[1][]'))
+            responses=()
+            for j in "${!emails[@]}"; do
+              email="${emails[$j]}"
+              if [[ "$email" == error* ]]; then
+                resp="error-email-lookup"
+              else
+                if [[ $idx =~ ^(0|2|4)$ ]]; then
+                  resp=$(python3 scripts/add_member_from_listserv.py "$email" "${urls[$idx]}" "${pws[$idx]}")
+                else
+                  resp=$(python3 scripts/remove_member_from_listserv.py "$email" "${urls[$idx]}" "${pws[$idx]}")
+                fi
+              fi
+              resp=$(echo "$resp" | sed ':a;N;$!ba;s/\n/\\n/g')
+              responses+=("\"$resp\"")
+            done
+            joined_responses=$(printf "%s," "${responses[@]}")
+            joined_responses="[${joined_responses%,}]"
+            tasks_json=$(echo "$arr" | jq '.[0]')
+            emails_json=$(echo "$arr" | jq '.[1]')
+            group="[${tasks_json},${emails_json},${joined_responses}]"
+            if [ $idx -eq 0 ]; then
+              updated_main_array+="$group"
+            else
+              updated_main_array+=",$group"
+            fi
+          done
+          updated_main_array+="]"
+          echo "$updated_main_array" > mailman_main_array_with_results.json
+          cat mailman_main_array_with_results.json
+
+      - name: Update ServiceNow tasks with results
+        env:
+          SN_USER: ${{ secrets.SERVICECONNECT_USERNAME }}
+          SN_PASS: ${{ secrets.SERVICECONNECT_PASSWORD }}
+        run: |
+          set -e
+          SNBASE="https://utsdevesm.service-now.com"
+          # Look up the sys_id for 'Listserv' configuration item ONCE
+          CI_SYSID=$(curl -s -u "$SN_USER:$SN_PASS" \
+            "$SNBASE/api/now/table/cmdb_ci?sysparm_query=name=Listserv&sysparm_fields=sys_id" \
+            | jq -r '.result[0].sys_id // empty')
+          if [[ -z "$CI_SYSID" ]]; then
+            echo "::error ::Can't find sys_id for Listserv CI"
             exit 1
           fi
+
+          for g in {0..5}; do
+            arr=$(jq ".[$g]" mailman_main_array_with_results.json)
+            tasks=($(echo "$arr" | jq -r '.[0][]'))
+            emails=($(echo "$arr" | jq -r '.[1][]'))
+            results=()
+            while IFS= read -r line; do
+                results+=("$line")
+            done < <(echo "$arr" | jq -r '.[2][]')
+            count=${#tasks[@]}
+            for idx in $(seq 0 $((count-1))); do
+              tasknum="${tasks[$idx]}"
+              email="${emails[$idx]}"
+              result="${results[$idx]}"
+              # Look up sys_id for this SCTASK number
+              TASK_SYSID=$(curl -s -u "$SN_USER:$SN_PASS" \
+                "$SNBASE/api/now/table/sc_task?sysparm_query=number=${tasknum}&sysparm_fields=sys_id" \
+                | jq -r '.result[0].sys_id // empty')
+              if [[ -n "$TASK_SYSID" && "$TASK_SYSID" != "null" ]]; then
+                work_note="🤖 Mailman result : $result"
+                # state: 3 (Closed), set CI, add note
+                curl -s -u "$SN_USER:$SN_PASS" \
+                  -X PATCH \
+                  -H "Content-Type: application/json" \
+                  -d '{
+                        "state": "3",
+                        "cmdb_ci": "'"${CI_SYSID}"'",
+                        "work_notes": "'"$work_note"'"
+                      }' \
+                  "$SNBASE/api/now/table/sc_task/${TASK_SYSID}" > /dev/null
+                echo "✅ Task $tasknum updated, CI assigned, and closed."
+              else
+                echo "::warning ::Could not find sys_id for $tasknum -- not updated."
+              fi
+            done
+          done
