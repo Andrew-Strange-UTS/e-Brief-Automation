@@ -183,7 +183,10 @@ jobs:
             arr=$(jq ".[$g]" mailman_main_array_with_results.json)
             tasks=($(echo "$arr" | jq -r '.[0][]'))
             emails=($(echo "$arr" | jq -r '.[1][]'))
-            results=($(echo "$arr" | jq -r '.[2][]'))
+            results=()
+            while IFS= read -r line; do
+                results+=("$line")
+            done < <(echo "$arr" | jq -r '.[2][]')
             count=${#tasks[@]}
             for idx in $(seq 0 $((count-1))); do
               tasknum="${tasks[$idx]}"
