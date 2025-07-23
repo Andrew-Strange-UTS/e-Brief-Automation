@@ -47,6 +47,10 @@ try:
     else:
         print("error-Response parse failed: " + " | ".join(li.text for li in lis))
 except Exception as ex:
-    print("error-" + str(ex))
+    maxlen = 100
+    msg = str(ex).replace('\n', '\\n')
+    if len(msg) > maxlen:
+        msg = msg[:maxlen] + '...'
+    print("error-" + msg)
 finally:
     driver.quit()
