@@ -194,7 +194,7 @@ jobs:
                 "$SNBASE/api/now/table/sc_task?sysparm_query=number=${tasknum}&sysparm_fields=sys_id" \
                 | jq -r '.result[0].sys_id // empty')
               if [[ -n "$TASK_SYSID" && "$TASK_SYSID" != "null" ]]; then
-                work_note="🤖 Mailman result for $email : $result"
+                work_note="🤖 Mailman result : $result"
                 # state: 3 (Closed), set CI, add note
                 curl -s -u "$SN_USER:$SN_PASS" \
                   -X PATCH \
