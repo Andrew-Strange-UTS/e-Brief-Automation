@@ -10,16 +10,13 @@ from webdriver_manager.chrome import ChromeDriverManager
 if len(sys.argv) != 4:
     print("error-usage: add_member_from_listserv.py EMAIL URL PASSWORD", file=sys.stderr)
     sys.exit(1)
-
 email = sys.argv[1]
 url = sys.argv[2]
 password = sys.argv[3]
-
 # EARLY OUT: Skip if email is empty, null, or looks like an error
 if not email or email.strip().lower() in ("null", "none", "") or email.startswith("error"):
     print("error-skipped-empty-or-error-email")
     sys.exit(0)
-
 chrome_options = Options()
 chrome_options.add_argument("--headless")
 chrome_options.add_argument("--no-sandbox")
@@ -29,7 +26,15 @@ driver = webdriver.Chrome(service=service, options=chrome_options)
 wait = WebDriverWait(driver, 20)
 try:
     driver.get(url)
-    wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Visit Site')]"))).click()
+    # New: check if body id="ngrok", and only then click Visit Site
+    try:
+        body = driver.find_element(By.TAG_NAME, "body")
+        if body.get_attribute("id") == "ngrok":
+            wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Visit Site')]"))).click()
+    except Exception:
+        # body element or id may not exist – that's fine, just proceed
+        pass
+
     pw_input = wait.until(EC.presence_of_element_located((By.XPATH, "//input[@type='password' and @name='adminpw']")))
     pw_input.send_keys(password)
     pw_input.submit()
